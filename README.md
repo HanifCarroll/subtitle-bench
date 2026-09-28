@@ -8,7 +8,7 @@ The [OpenSubtitles archive helpers](opensubtitles-archive/README.md) are version
 
 [Historical scripts and research notes](history/README.md) are kept separately from the current workbench. They are snapshots, not supported entry points.
 
-The local checks need Python 3, FFmpeg, ffprobe, and the existing Silero model. `episode-check` also needs the local MLX audio environment with Qwen3 ASR. Transcription needs whisper.cpp. Translation and targeted provider review are separate, billable actions and require authorization before `--run` or a live request. None of the tests make a provider call.
+The local checks need Python 3, FFmpeg, ffprobe, and the existing Silero model. `episode-check` also needs the local MLX audio environment with Qwen3 ASR. Transcription needs whisper.cpp. Translation and targeted provider review are separate, billable actions and require authorization before `--run` or a live request. None of the tests make a provider call. See [SETUP.md](SETUP.md) for the versions used in the current pilot and [EXPERIMENTS-2026-09-28.md](EXPERIMENTS-2026-09-28.md) for its results.
 
 Run the portable checks:
 
@@ -17,4 +17,8 @@ python3 scripts/test-subtitle-workbench.py
 python3 scripts/source-review.py check
 python3 scripts/audit-speech-coverage.py --check
 python3 scripts/test-google-second-opinion.py
+python3 scripts/test-translate-subtitles.py
+python3 scripts/test-layout-cues.py
+python3 scripts/test-layout-audit.py
+python3 scripts/test-elevenlabs-scribe-trial.py
 ```

@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 READ_CUES = runpy.run_path(str(Path(__file__).with_name("subtitle-timing.py")))["read_cues"]
+SEMANTIC = runpy.run_path(str(Path(__file__).with_name("semantic-review.py")))
 GOOGLE_URL = "https://translation.googleapis.com/language/translate/v2"
 MAX_BATCH_CUES = 100
 MAX_BATCH_CHARACTERS = 5_000
@@ -30,17 +31,35 @@ def save_json(path, value):
     os.replace(temporary, path)
 
 
-def aligned_cues(source, draft):
+def aligned_cues(source, draft, utterance_map=None):
     source_cues = READ_CUES(source)
     draft_cues = READ_CUES(draft)
+    if utterance_map is not None:
+        manifest = json.loads(utterance_map.read_text(encoding="utf-8"))
+        SEMANTIC["validate"](manifest, source, draft)
+        mapped_source = []
+        mapped_draft = []
+        for unit in manifest["utterances"]:
+            linked = [item for item in manifest["translations"]
+                      if unit["id"] in item["source_ids"]]
+            mapped_source.append({"id": unit["id"], "start": unit["start_ms"],
+                                  "end": unit["end_ms"], "text": unit["text"]})
+            mapped_draft.append({"text": " / ".join(item["text"] for item in linked),
+                                 "translation_ids": [item["id"] for item in linked],
+                                 "link_status": "confirmed" if linked and all(
+                                     item["link_status"] == "confirmed" for item in linked
+                                 ) else "provisional"})
+        return mapped_source, mapped_draft
+
     if len(source_cues) != len(draft_cues):
-        raise ValueError("Source and English draft need matching cue counts")
+        raise ValueError("Different cue counts need --utterance-map with explicit links")
 
     for original, translated in zip(source_cues, draft_cues):
         if (original["start"], original["end"]) != (translated["start"], translated["end"]):
             raise ValueError(f"English draft timing differs at cue {original['id']}")
 
-    return source_cues, draft_cues
+    return source_cues, [{"text": cue["text"], "translation_ids": [cue["id"]],
+                          "link_status": "legacy_one_to_one"} for cue in draft_cues]
 
 
 def batches(cues):
@@ -120,6 +139,8 @@ def review_report(source, draft, source_cues, draft_cues, translations, settings
             "id": original["id"], "start_ms": original["start"],
             "end_ms": original["end"], "source": original["text"],
             "english_draft": english["text"],
+            "translation_ids": english["translation_ids"],
+            "link_status": english["link_status"],
             "google_nmt": translations[str(original["id"])],
             "review_status": "unreviewed",
         })
@@ -158,7 +179,8 @@ def run(args):
     if output.exists():
         raise FileExistsError(f"Review report already exists: {output}")
 
-    source_cues, draft_cues = aligned_cues(source, draft)
+    utterance_map = getattr(args, "utterance_map", None)
+    source_cues, draft_cues = aligned_cues(source, draft, utterance_map)
     planned_batches = list(batches(source_cues))
     characters = sum(len(cue["text"]) for cue in source_cues)
     plan = {"cues": len(source_cues), "requests": len(planned_batches),
@@ -176,7 +198,8 @@ def run(args):
     project = google_project(args.google_project)
     settings = {"provider": "google-nmt", "source_language": args.source_language.lower(),
                 "target_language": "en", "google_project": project,
-                "source_sha256": file_hash(source), "english_draft_sha256": file_hash(draft)}
+                "source_sha256": file_hash(source), "english_draft_sha256": file_hash(draft),
+                "utterance_map_sha256": file_hash(utterance_map) if utterance_map else None}
     progress_path = output.with_suffix(".progress.json")
     progress = (json.loads(progress_path.read_text(encoding="utf-8"))
                 if progress_path.exists() else {**settings, "translations": {}, "request_seconds": []})
@@ -210,7 +233,8 @@ def run(args):
     if set(progress["translations"]) != expected_ids:
         raise ValueError("Google second opinion is incomplete")
     if (file_hash(source) != settings["source_sha256"] or
-            file_hash(draft) != settings["english_draft_sha256"]):
+            file_hash(draft) != settings["english_draft_sha256"] or
+            (utterance_map and file_hash(utterance_map) != settings["utterance_map_sha256"])):
         raise ValueError("Subtitle inputs changed during the Google run")
 
     report = review_report(source, draft, source_cues, draft_cues,
@@ -227,6 +251,8 @@ def main():
     parser.add_argument("english_draft", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--source-language", required=True)
+    parser.add_argument("--utterance-map", type=Path,
+                        help="current explicit source-to-English utterance links")
     parser.add_argument("--google-project")
     parser.add_argument("--run", action="store_true", help="make paid Google NMT calls")
     parser.add_argument("--max-source-characters", type=int,

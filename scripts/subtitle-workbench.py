@@ -20,6 +20,7 @@ SCRIPTS = Path(__file__).resolve().parent
 SOURCE_REVIEW = runpy.run_path(str(SCRIPTS / "source-review.py"))
 TIMING = runpy.run_path(str(SCRIPTS / "subtitle-timing.py"))
 COVERAGE = runpy.run_path(str(SCRIPTS / "audit-speech-coverage.py"))
+SEMANTIC = runpy.run_path(str(SCRIPTS / "semantic-review.py"))
 read_cues = TIMING["read_cues"]
 file_hash = SOURCE_REVIEW["FILE_HASH"]
 
@@ -44,11 +45,43 @@ def cue_record(cue):
     }
 
 
+def source_snapshots(case_directory, needed_hashes):
+    """Find saved source versions for interval-safe reuse of old decisions."""
+    found = {}
+    candidates = list((case_directory / "decisions").rglob("*.srt"))
+    candidates += list(case_directory.glob("original*.srt"))
+    for path in candidates:
+        value = file_hash(path)
+        if value in needed_hashes and value not in found:
+            found[value] = read_cues(path)
+            if len(found) == len(needed_hashes):
+                break
+    return found
+
+
+def decision_matches_interval(decision, issue, current_cues, snapshots):
+    """Keep a decision current when the reviewed local subtitle span is unchanged."""
+    local_hash = SOURCE_REVIEW["source_interval_sha256"](
+        current_cues, issue["start_ms"], issue["end_ms"]
+    )
+    if decision.get("source_interval_sha256"):
+        return decision["source_interval_sha256"] == local_hash
+
+    recorded_hash = decision.get("working_after_sha256") or decision.get(
+        "working_before_sha256"
+    )
+    prior = snapshots.get(recorded_hash)
+    return bool(prior) and SOURCE_REVIEW["source_interval_sha256"](
+        prior, issue["start_ms"], issue["end_ms"]
+    ) == local_hash
+
+
 def current_queue(case_directory):
     """Return issues still needing review against the current working SRT."""
     queue = SOURCE_REVIEW["build_queue"](case_directory)
     _, working = SOURCE_REVIEW["load_case"](case_directory)
     current_hash = file_hash(working)
+    working_cues = read_cues(working)
     decisions = {}
     reviewed_intervals = {}
     for path in sorted((case_directory / "decisions").glob("*/decision.json")):
@@ -59,6 +92,11 @@ def current_queue(case_directory):
             key = (interval["kind"], interval["start_ms"], interval["end_ms"])
             reviewed_intervals[key] = record["status"]
 
+    snapshot_hashes = {record.get("working_after_sha256") or record.get(
+        "working_before_sha256") for record in decisions.values()
+        if not record.get("source_interval_sha256")}
+    snapshots = source_snapshots(case_directory, snapshot_hashes - {None})
+
     pending = []
     for issue in queue["issues"]:
         decision = decisions.get(issue["id"])
@@ -67,10 +105,15 @@ def current_queue(case_directory):
             issue[key] == recorded_interval[key]
             for key in ("kind", "start_ms", "end_ms")
         )
+        matching_content = bool(decision) and (
+            (decision.get("working_after_sha256") or decision.get("working_before_sha256"))
+            == current_hash or decision_matches_interval(
+                decision, issue, working_cues, snapshots
+            )
+        )
         reviewed_current_version = decision and (
             same_interval and decision["status"] in ("reviewed", "resolved")
-            and (decision.get("working_after_sha256") or decision["working_before_sha256"])
-            == current_hash
+            and matching_content
         )
         interval_key = (issue["kind"], issue["start_ms"], issue["end_ms"])
         reviewed_current_version = reviewed_current_version or (
@@ -127,6 +170,48 @@ def unresolved_source_issues(case_directory, queue):
             == "unresolved" or decisions.get(issue["id"]) == "unresolved"]
 
 
+def source_decision_blockers(case_directory, queue, pending, source, video_sha256):
+    """Check evidence for source questions that a decision claims to close."""
+    open_ids = {item["id"] for item in pending}
+    records = [json.loads(path.read_text(encoding="utf-8"))
+               for path in sorted((case_directory / "decisions").glob("*/decision.json"))]
+    source_cues = read_cues(source)
+    source_hash = file_hash(source)
+    snapshot_hashes = {value for record in records
+                       for value in (record.get("working_before_sha256"),
+                                     record.get("working_after_sha256")) if value}
+    snapshots = source_snapshots(case_directory, snapshot_hashes - {None})
+    for issue in queue["issues"]:
+        if issue["id"] in open_ids:
+            continue
+        decision = next((record for record in reversed(records)
+                         if record.get("issue_id") == issue["id"]
+                         or record.get("issue_interval") == {
+                             key: issue[key] for key in ("kind", "start_ms", "end_ms")
+                         }), None)
+        if decision is None:
+            return [f"Source issue {issue['id']} lacks a review decision"]
+        if not decision_matches_interval(decision, issue, source_cues, snapshots):
+            return [f"Source issue {issue['id']} has stale local evidence"]
+        blockers = SOURCE_REVIEW["evidence_blockers"](
+            case_directory, decision.get("evidence", []), issue["start_ms"],
+            issue["end_ms"], video_sha256,
+        )
+        reviewed_cues = snapshots.get(decision.get("working_before_sha256"), source_cues)
+        blockers.extend(SOURCE_REVIEW["review_result_blockers"](
+            case_directory, decision.get("review_result"), issue["start_ms"],
+            issue["end_ms"], video_sha256,
+            decision.get("working_before_sha256") or source_hash,
+            SOURCE_REVIEW["source_interval_sha256"](
+                reviewed_cues, issue["start_ms"], issue["end_ms"]
+            ),
+        ))
+        if blockers:
+            return [f"Source issue {issue['id']}: {'; '.join(blockers)}"]
+
+    return []
+
+
 def audio_decision_blockers(audio_path, decisions_path, source, video):
     """Require an explicit agent decision for each independent ASR question."""
     audio = json.loads(audio_path.read_text(encoding="utf-8"))
@@ -158,10 +243,44 @@ def audio_decision_blockers(audio_path, decisions_path, source, video):
                 or any(not isinstance(path, str) or not Path(path).is_file()
                        for path in evidence)):
             return ["Audio decision is incomplete or has invalid evidence"]
+        blockers = SOURCE_REVIEW["evidence_blockers"](
+            decisions_path.parent, evidence, key[0], key[1], file_hash(video),
+        )
+        blockers.extend(SOURCE_REVIEW["review_result_blockers"](
+            decisions_path.parent, entry.get("review_result"), key[0], key[1],
+            file_hash(video), file_hash(source),
+            SOURCE_REVIEW["source_interval_sha256"](
+                read_cues(source), key[0], key[1]
+            ),
+        ))
+        if blockers:
+            return [f"Audio decision {key[0]}-{key[1]}: {'; '.join(blockers)}"]
         recorded.add(key)
 
     missing = expected - recorded
     return [f"{len(missing)} audio questions need decisions"] if missing else []
+
+
+def audio_scan_blockers(audio, duration_ms):
+    """Reject reports that skip part of the video or contain unusable windows."""
+    if audio.get("start_ms") != 0 or audio.get("end_ms") != duration_ms:
+        return ["Audio scan does not cover the complete video"]
+
+    windows = audio.get("windows")
+    if not isinstance(windows, list) or not windows:
+        return ["Audio scan has no windows"]
+
+    cursor = 0
+    for window in windows:
+        if (not isinstance(window, dict) or window.get("start_ms") != cursor
+                or type(window.get("end_ms")) is not int
+                or not cursor < window["end_ms"] <= duration_ms):
+            return ["Audio scan has a missing or malformed interval"]
+        if window.get("status") in ("failed", "truncated", "unusable"):
+            return ["Audio scan contains an unusable interval"]
+        cursor = window["end_ms"]
+
+    return [] if cursor == duration_ms else ["Audio scan ends before the video"]
 
 
 def normalize_input(path, encoding, output_directory, label):
@@ -226,8 +345,11 @@ def transcribe(args):
 
 def translate_draft(args):
     if not args.run:
-        cues = read_cues(args.source.resolve(strict=True))
-        print(json.dumps({"source_cues": len(cues),
+        script = runpy.run_path(str(SCRIPTS / "translate-subtitles.py"))
+        cues, _ = script["translation_targets"](
+            args.source.resolve(strict=True), args.utterance_map)
+        count_label = "source_units" if args.utterance_map else "source_cues"
+        print(json.dumps({count_label: len(cues),
                           "source_characters": sum(len(cue["text"]) for cue in cues),
                           "billable_run": False}))
         return
@@ -286,6 +408,9 @@ def save_pair_revision(case_directory, case, source, target, updated, decision, 
             record["issue_interval"] = {
                 key: issue[key] for key in ("kind", "start_ms", "end_ms")
             }
+            record["source_interval_sha256"] = SOURCE_REVIEW["source_interval_sha256"](
+                read_cues(source), issue["start_ms"], issue["end_ms"]
+            )
         save_json(revision / "decision.json", record)
     except BaseException as error:
         restore_errors = []
@@ -330,6 +455,24 @@ def insert_pair(args):
     additions = decision.get("cues", [])
     if not isinstance(additions, list) or not additions:
         raise ValueError("Pair decision needs timed cues")
+    if (type(decision.get("speech_start_ms")) is not int
+            or type(decision.get("speech_end_ms")) is not int):
+        raise ValueError("Pair decision needs a confirmed speech interval")
+
+    blockers = SOURCE_REVIEW["evidence_blockers"](
+        case_directory, evidence, decision.get("speech_start_ms"),
+        decision.get("speech_end_ms"), case["video_sha256"],
+    )
+    blockers.extend(SOURCE_REVIEW["review_result_blockers"](
+        case_directory, decision.get("review_result"), decision.get("speech_start_ms"),
+        decision.get("speech_end_ms"), case["video_sha256"], file_hash(source),
+        SOURCE_REVIEW["source_interval_sha256"](
+            read_cues(source), decision.get("speech_start_ms"),
+            decision.get("speech_end_ms"),
+        ),
+    ))
+    if blockers:
+        raise ValueError("; ".join(blockers))
 
     # 2. Reject blank text, overlap, and any uncovered part of confirmed speech.
 
@@ -403,6 +546,17 @@ def replace_pair(args):
     if not isinstance(additions, list) or not additions:
         raise ValueError("Pair decision needs timed bilingual cues")
 
+    blockers = SOURCE_REVIEW["evidence_blockers"](
+        case_directory, evidence, start, end, case["video_sha256"],
+    )
+    blockers.extend(SOURCE_REVIEW["review_result_blockers"](
+        case_directory, decision.get("review_result"), start, end,
+        case["video_sha256"], file_hash(source),
+        SOURCE_REVIEW["source_interval_sha256"](read_cues(source), start, end),
+    ))
+    if blockers:
+        raise ValueError("; ".join(blockers))
+
     issue = None
     if decision.get("issue_id"):
         queue, _ = current_queue(case_directory)
@@ -452,7 +606,7 @@ def replace_pair(args):
 
 
 def gap_review_windows(issue, duration_ms, context_seconds):
-    """Cover a long subtitle-free span with overlapping review clips."""
+    """Cover any disputed interval with overlapping review clips."""
     if context_seconds < 0:
         raise ValueError("Review context must be nonnegative")
 
@@ -612,18 +766,12 @@ def review(args):
         print(json.dumps({"case": str(case_directory), "pending": 0}))
         return
 
-    review_windows = []
-    if chosen["kind"] == "subtitle_gap":
-        case, _ = SOURCE_REVIEW["load_case"](case_directory)
-        review_windows = gap_review_windows(chosen, case["duration_ms"], args.context)
-        for start, end in review_windows:
-            center = (start + end) / 2000
-            half_duration = (end - start) / 2000
-            SOURCE_REVIEW["inspect"](case_directory, center, half_duration, half_duration)
-    else:
-        center_ms = (chosen["start_ms"] + min(chosen["end_ms"], chosen["start_ms"] + 20_000)) / 2
-        center = max(0, center_ms / 1000)
-        SOURCE_REVIEW["inspect"](case_directory, center, args.context, args.context)
+    case, _ = SOURCE_REVIEW["load_case"](case_directory)
+    review_windows = gap_review_windows(chosen, case["duration_ms"], args.context)
+    for start, end in review_windows:
+        center = (start + end) / 2000
+        half_duration = (end - start) / 2000
+        SOURCE_REVIEW["inspect"](case_directory, center, half_duration, half_duration)
     cue_ids = chosen.get("cue_ids", [])
     summary = {key: value for key, value in chosen.items() if key != "cue_ids"}
     if cue_ids:
@@ -644,6 +792,9 @@ def translation_audit(args):
 
     source_cues = read_cues(source)
     target_cues = read_cues(target)
+    max_cps = getattr(args, "max_cps", 25)
+    if max_cps <= 0:
+        raise ValueError("Reading-speed threshold must be positive")
     last_end = max((cue["end"] for cue in source_cues + target_cues), default=0)
     window_count = (last_end + 59_999) // 60_000
     windows = []
@@ -660,17 +811,43 @@ def translation_audit(args):
     # 2. Flag mechanical gaps and suspicious target repetition for review.
 
     flags = []
+    presentation_flags = []
+    for language, cues in (("source", source_cues), ("target", target_cues)):
+        for cue in cues:
+            characters_per_second = len(cue["text"].replace("\n", "")) * 1000 / (
+                cue["end"] - cue["start"]
+            )
+            if characters_per_second > max_cps:
+                presentation_flags.append({"kind": "fast_cue", "language": language,
+                                           "cue_id": cue["id"],
+                                           "characters_per_second": round(
+                                               characters_per_second, 2
+                                           )})
     # ponytail: pairwise scans suit a few thousand cues; index times for much larger files.
     for label, cues, counterparts in (
         ("source_without_target", source_cues, target_cues),
         ("target_without_source", target_cues, source_cues),
     ):
         for cue in cues:
-            if not any(other["start"] < cue["end"] and other["end"] > cue["start"]
-                       for other in counterparts):
+            if not any(meaningful_overlap(cue, other) for other in counterparts):
                 flags.append({"id": f"{label}:{cue['id']}", "kind": label,
                               "start_ms": cue["start"], "end_ms": cue["end"],
                               "cue": cue_record(cue)})
+
+    for cue in target_cues:
+        related = [other for other in source_cues if meaningful_overlap(cue, other)]
+        if len(related) >= 3:
+            flags.append({
+                "id": f"many_source_cues_one_target:{cue['id']}",
+                "kind": "many_source_cues_one_target",
+                "start_ms": cue["start"], "end_ms": cue["end"],
+                "source_ids": [other["id"] for other in related],
+                "target_id": cue["id"],
+            })
+        if cue["end"] - cue["start"] > 8_000:
+            flags.append({"id": f"long_target_cue:{cue['id']}",
+                          "kind": "long_target_cue", "start_ms": cue["start"],
+                          "end_ms": cue["end"], "target_id": cue["id"]})
 
     run_start = 0
     for index in range(1, len(target_cues) + 1):
@@ -692,13 +869,21 @@ def translation_audit(args):
         "target": str(target), "target_sha256": file_hash(target),
         "source_cues": len(source_cues), "target_cues": len(target_cues),
         "flags": sorted(flags, key=lambda item: (item["start_ms"], item["id"])),
+        "presentation_flags": presentation_flags, "max_cps": max_cps,
         "windows": windows,
         "note": "Mechanical flags do not establish translation meaning. Review every window against the source.",
     }
     save_json(args.output, report)
     print(json.dumps({"report": str(args.output), "windows": len(windows),
                       "flags": len(flags), "source_cues": len(source_cues),
-                      "target_cues": len(target_cues)}))
+                      "target_cues": len(target_cues),
+                      "presentation_flags": len(presentation_flags)}))
+
+
+def meaningful_overlap(left, right):
+    overlap = min(left["end"], right["end"]) - max(left["start"], right["start"])
+    shorter = min(left["end"] - left["start"], right["end"] - right["start"])
+    return overlap >= max(100, min(500, shorter // 4))
 
 
 def words(text):
@@ -717,7 +902,7 @@ def repeated_phrase(tokens):
 
 
 def compare_audio_window(transcript, cue_text):
-    """Raise a question when independently heard words are absent from the SRT."""
+    """Raise focused questions in both directions without treating ASR as truth."""
     heard = words(transcript)
     written = words(cue_text)
     counts = Counter(heard)
@@ -727,24 +912,47 @@ def compare_audio_window(transcript, cue_text):
     shared = sum((counts & Counter(written)).values())
     agreement = round(shared / len(heard), 3) if heard else None
     unmatched = []
+    unsupported = []
+    meaning_changers = {"evet", "hayır", "değil", "yok", "var", "asla", "hiç", "no", "not", "never", "yes"}
     for tag, left, right, _, _ in SequenceMatcher(
         None, heard, written, autojunk=False
     ).get_opcodes():
         if tag in ("delete", "replace"):
             unmatched.append(heard[left:right])
 
+    for tag, _, _, left, right in SequenceMatcher(
+        None, heard, written, autojunk=False
+    ).get_opcodes():
+        if tag in ("insert", "replace"):
+            unsupported.append(written[left:right])
+
     longest_unmatched = max(unmatched, key=len, default=[])
+    longest_unsupported = max(unsupported, key=len, default=[])
+    material_word = bool(meaning_changers.intersection(
+        set(longest_unmatched + longest_unsupported)
+    ))
+    focused = max(len(heard), len(written)) <= 20
     if looped:
         issue = "repeated_asr_output"
-    elif len(heard) >= 6 and (agreement < 0.25 or len(longest_unmatched) >= 8):
+    elif heard and focused and (len(longest_unmatched) >= 3 or material_word
+                               or (len(heard) >= 6 and agreement < 0.25)):
         issue = "possible_missing_or_wrong_subtitle"
+    elif heard and not focused and len(longest_unmatched) >= 6 and agreement < 0.65:
+        issue = "possible_missing_or_wrong_subtitle"
+    elif heard and focused and len(longest_unsupported) >= 3:
+        issue = "possible_unsupported_subtitle"
+    elif heard and not focused and len(longest_unsupported) >= 8 and agreement < 0.6:
+        issue = "possible_unsupported_subtitle"
     else:
         issue = None
 
     return {"heard_words": len(heard), "written_words": len(written),
             "word_agreement": agreement,
             "longest_unmatched_words": len(longest_unmatched),
-            "unmatched_example": " ".join(longest_unmatched[:20]), "issue": issue}
+            "unmatched_example": " ".join(longest_unmatched[:20]),
+            "longest_unsupported_words": len(longest_unsupported),
+            "unsupported_example": " ".join(longest_unsupported[:20]),
+            "issue": issue}
 
 
 def audio_check(args):
@@ -817,8 +1025,11 @@ def audio_check(args):
                 ], check=True, capture_output=True)
                 result = model.generate(str(clip), language=args.language,
                                         max_tokens=args.max_tokens)
+                finish_reason = getattr(result, "finish_reason", None)
                 cache["windows"][str(start)] = {
                     "start_ms": start, "end_ms": end, "text": result.text.strip(),
+                    "finish_reason": (finish_reason if isinstance(finish_reason, str)
+                                      else None),
                 }
                 save_json(args.cache, cache)
                 clip.unlink()
@@ -832,7 +1043,21 @@ def audio_check(args):
         source_text = " ".join(cue["text"] for cue in cues
                                if cue["start"] < transcript["end_ms"]
                                and cue["end"] > start)
-        windows.append({**transcript, **compare_audio_window(transcript["text"], source_text)})
+        comparison = compare_audio_window(transcript["text"], source_text)
+        finish_reason = transcript.get("finish_reason")
+        if finish_reason in ("length", "max_tokens"):
+            status = "truncated"
+        elif not transcript["text"]:
+            status = "empty"
+        elif len(words(transcript["text"])) >= args.max_tokens - 8:
+            status = "truncated"
+        elif comparison["issue"] == "repeated_asr_output":
+            status = "questionable"
+        else:
+            status = "complete"
+        if status in ("empty", "truncated"):
+            comparison["issue"] = f"{status}_asr_output"
+        windows.append({**transcript, **comparison, "status": status})
 
     report = {"video": str(video), "video_sha256": case["video_sha256"],
               "source": str(working), "source_sha256": file_hash(working),
@@ -880,6 +1105,9 @@ def episode_check(args):
         source_language=args.source_language, target_language=args.target_language,
         case=case_directory, translation_report=translation_report,
         audio_report=audio_report, audio_decisions=args.output / "audio-decisions.json",
+        semantic_manifest=args.semantic_manifest, semantic_reviews=args.semantic_reviews,
+        semantic_model=args.semantic_model, semantic_batch_size=args.semantic_batch_size,
+        glossary=args.glossary,
         output=release_report, apply=False, backup_dir=None,
     ))
     audio = json.loads(audio_report.read_text(encoding="utf-8"))
@@ -954,6 +1182,8 @@ def release(args):
     audio_path = args.audio_report.resolve(strict=True)
     decisions_path = args.audio_decisions.resolve()
     review_paths = {translation_path, audio_path, decisions_path}
+    semantic_manifest = getattr(args, "semantic_manifest", None)
+    semantic_reviews = getattr(args, "semantic_reviews", None)
     destinations = [video.with_suffix(f".{args.source_language}.srt"),
                     video.with_suffix(f".{args.target_language}.srt")]
     protected_paths = {video, source, target}
@@ -962,6 +1192,8 @@ def release(args):
     protected_paths.update(case_directory / name for name in (
         "case.json", "review-queue.json", "speech-coverage.json", "speech-coverage.sha256"
     ))
+    if semantic_manifest:
+        protected_paths.add(semantic_manifest.resolve())
     if (source == target or destinations[0] == destinations[1] or
             args.output.resolve() in protected_paths):
         raise ValueError("Output report must differ from media, subtitles, and review files")
@@ -976,13 +1208,37 @@ def release(args):
     if (translation["source_sha256"] != file_hash(source) or
             translation["target_sha256"] != file_hash(target)):
         blockers.append("Translation report is stale")
+    if not semantic_manifest or not semantic_reviews:
+        blockers.append("English semantic review is missing")
+    else:
+        semantic_manifest = semantic_manifest.resolve()
+        if semantic_manifest.is_file():
+            mapping = json.loads(semantic_manifest.read_text(encoding="utf-8"))
+            if (Path(mapping.get("source", "")).resolve() != source
+                    or Path(mapping.get("target", "")).resolve() != target):
+                blockers.append("English semantic review belongs to another subtitle pair")
+            else:
+                blockers.extend(SEMANTIC["blockers"](
+                    semantic_manifest, semantic_reviews,
+                    getattr(args, "semantic_model", "qwen3.5:27b"),
+                    getattr(args, "semantic_batch_size", 12),
+                    getattr(args, "glossary", None),
+                ))
+        else:
+            blockers.append("Utterance map is missing")
     blockers.extend(audio_decision_blockers(audio_path, decisions_path, source, video))
 
     duration_ms = round(COVERAGE["duration_seconds"](video) * 1000)
+    blockers.extend(audio_scan_blockers(
+        json.loads(audio_path.read_text(encoding="utf-8")), duration_ms
+    ))
     source_cues, source_errors = validate_cues(source, duration_ms)
     target_cues, target_errors = validate_cues(target, duration_ms)
     blockers.extend(source_errors + target_errors)
     queue, pending = current_queue(case_directory)
+    blockers.extend(source_decision_blockers(
+        case_directory, queue, pending, source, case["video_sha256"]
+    ))
     if pending:
         blockers.append(f"{len(pending)} source questions need decisions")
     urgent = urgent_source_issues(pending)
@@ -1107,6 +1363,8 @@ def main():
     drafting.add_argument("output", type=Path)
     drafting.add_argument("--source-language", required=True)
     drafting.add_argument("--batch-size", type=int, default=15)
+    drafting.add_argument("--utterance-map", type=Path,
+                          help="write a source-linked JSON draft without fixed cue layout")
     drafting.add_argument("--run", action="store_true", help="make authorized billable calls")
 
     second_opinion = commands.add_parser(
@@ -1116,6 +1374,8 @@ def main():
     second_opinion.add_argument("english_draft", type=Path)
     second_opinion.add_argument("output", type=Path)
     second_opinion.add_argument("--source-language", required=True)
+    second_opinion.add_argument("--utterance-map", type=Path,
+                                help="current explicit source-to-English links")
     second_opinion.add_argument("--google-project")
     second_opinion.add_argument("--run", action="store_true",
                                 help="make authorized billable calls")
@@ -1154,6 +1414,7 @@ def main():
     translating.add_argument("source", type=Path)
     translating.add_argument("target", type=Path)
     translating.add_argument("--output", type=Path, required=True)
+    translating.add_argument("--max-cps", type=float, default=25)
 
     checking_audio = commands.add_parser(
         "audio-check", help="compare local independent ASR with the source SRT"
@@ -1178,6 +1439,11 @@ def main():
     checking_episode.add_argument("--output", type=Path, required=True)
     checking_episode.add_argument("--model", default="mlx-community/Qwen3-ASR-1.7B-4bit")
     checking_episode.add_argument("--audio-language", default="Turkish")
+    checking_episode.add_argument("--semantic-manifest", type=Path)
+    checking_episode.add_argument("--semantic-reviews", type=Path)
+    checking_episode.add_argument("--semantic-model", default="qwen3.5:27b")
+    checking_episode.add_argument("--semantic-batch-size", type=int, default=12)
+    checking_episode.add_argument("--glossary", type=Path)
 
     releasing = commands.add_parser("release", help="validate and optionally install one pair")
     releasing.add_argument("video", type=Path)
@@ -1189,6 +1455,11 @@ def main():
     releasing.add_argument("--translation-report", type=Path, required=True)
     releasing.add_argument("--audio-report", type=Path, required=True)
     releasing.add_argument("--audio-decisions", type=Path, required=True)
+    releasing.add_argument("--semantic-manifest", type=Path)
+    releasing.add_argument("--semantic-reviews", type=Path)
+    releasing.add_argument("--semantic-model", default="qwen3.5:27b")
+    releasing.add_argument("--semantic-batch-size", type=int, default=12)
+    releasing.add_argument("--glossary", type=Path)
     releasing.add_argument("--output", type=Path, required=True)
     releasing.add_argument("--apply", action="store_true")
     releasing.add_argument("--backup-dir", type=Path)

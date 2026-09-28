@@ -2,6 +2,7 @@
 """Agent-operated review of one video's source-language subtitle draft."""
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -232,6 +233,52 @@ def issue(kind, start, end, key, **detail):
     }
 
 
+def evidence_disagreements(directory, case):
+    """Keep independently found audio conflicts in the normal review queue."""
+    path = directory / "evidence-disagreements.json"
+    if not path.is_file():
+        return []
+
+    report = json.loads(path.read_text(encoding="utf-8"))
+    if (report.get("version") != 1
+            or report.get("video_sha256") != case["video_sha256"]
+            or not isinstance(report.get("disagreements"), list)):
+        raise ValueError("Evidence disagreements have a stale video or malformed list")
+
+    issues = []
+    seen = set()
+    for item in report["disagreements"]:
+        if not isinstance(item, dict):
+            raise ValueError("Evidence disagreement must be an object")
+
+        key = item.get("id")
+        start = item.get("start_ms")
+        end = item.get("end_ms")
+        summary = item.get("summary")
+        evidence = item.get("evidence")
+        if (not isinstance(key, str) or not key or key in seen
+                or type(start) is not int or type(end) is not int
+                or not 0 <= start < end <= case["duration_ms"]
+                or not isinstance(summary, str) or not summary.strip()
+                or not isinstance(evidence, list) or not evidence):
+            raise ValueError("Evidence disagreement is incomplete or out of range")
+
+        for reference in evidence:
+            if not isinstance(reference, dict):
+                raise ValueError("Evidence disagreement has malformed evidence")
+            evidence_path = reference.get("path")
+            if (not isinstance(evidence_path, str)
+                    or not (directory / evidence_path).is_file()
+                    or FILE_HASH(directory / evidence_path) != reference.get("sha256")):
+                raise ValueError("Evidence disagreement has missing or changed evidence")
+
+        seen.add(key)
+        issues.append(issue("evidence_disagreement", start, end, key,
+                            summary=summary, evidence=evidence))
+
+    return issues
+
+
 def long_subtitle_gaps(cues, duration_ms, minimum_ms=10_000):
     """Flag cue-free spans without depending on a voice detector."""
     gaps = []
@@ -434,6 +481,8 @@ def build_queue(directory):
                     )
                 )
 
+    items.extend(evidence_disagreements(directory, case))
+
     items.sort(key=lambda item: (item["start_ms"], item["end_ms"], item["id"]))
     report = {
         "working": str(working),
@@ -551,6 +600,7 @@ def inspect(directory, at_seconds, before, after):
         "video_start_ms": start,
         "video_end_ms": end,
         "original_video": case["video"],
+        "video_sha256": case["video_sha256"],
         "audio_clip": str(audio),
         "video_clip": str(video_clip),
         "audio_sha256": FILE_HASH(audio),
@@ -579,6 +629,111 @@ def inspect(directory, at_seconds, before, after):
             ensure_ascii=False,
         )
     )
+
+
+def evidence_blockers(directory, paths, start_ms, end_ms, video_sha256):
+    """Check that hashed original-audio clips cover the full disputed interval."""
+    intervals = []
+    for item in paths:
+        path = (directory / item).resolve()
+        if not path.is_file():
+            return ["Evidence file is missing"]
+        metadata_path = path.with_suffix(".json") if path.suffix == ".wav" else path
+        if metadata_path.suffix != ".json" or not metadata_path.is_file():
+            continue
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeError):
+            continue
+        if not isinstance(metadata, dict):
+            continue
+        if "clips" in metadata:
+            if metadata.get("video_sha256") != video_sha256:
+                return ["Evidence bundle belongs to another video"]
+            clips = metadata["clips"]
+        elif "audio_clip" in metadata:
+            original_video = metadata.get("original_video")
+            if (metadata.get("video_sha256") != video_sha256
+                    and (not original_video or not Path(original_video).is_file()
+                         or FILE_HASH(Path(original_video)) != video_sha256)):
+                return ["Evidence clip belongs to another video"]
+            clips = [metadata]
+        else:
+            continue
+        if not isinstance(clips, list):
+            return ["Evidence clips are malformed"]
+        for clip in clips:
+            audio = Path(clip.get("audio_clip", ""))
+            if (type(clip.get("video_start_ms")) is not int
+                    or type(clip.get("video_end_ms")) is not int
+                    or not 0 <= clip["video_start_ms"] < clip["video_end_ms"]
+                    or not audio.is_file()
+                    or FILE_HASH(audio) != clip.get("audio_sha256")):
+                return ["Evidence clip is missing, stale, or malformed"]
+            intervals.append((clip["video_start_ms"], clip["video_end_ms"]))
+
+    cursor = start_ms
+    for clip_start, clip_end in sorted(intervals):
+        if clip_start > cursor:
+            return ["Evidence clips do not cover the disputed interval"]
+        cursor = max(cursor, clip_end)
+        if cursor >= end_ms:
+            return []
+
+    return ["Evidence clips do not cover the disputed interval"]
+
+
+def review_result_blockers(directory, path, start_ms, end_ms, video_sha256,
+                           source_sha256, source_interval_sha256=None):
+    """Require two traceable audio-review stages bound to the current source."""
+    if not isinstance(path, str) or not (directory / path).is_file():
+        return ["Audio review result is missing"]
+    try:
+        result = json.loads((directory / path).read_text(encoding="utf-8"))
+    except (ValueError, UnicodeError):
+        return ["Audio review result is malformed"]
+    if not isinstance(result, dict):
+        return ["Audio review result is malformed"]
+
+    reported_interval_hash = result.get("source_interval_sha256")
+    if reported_interval_hash:
+        source_mismatch = reported_interval_hash != source_interval_sha256
+    else:
+        source_mismatch = result.get("source_sha256") != source_sha256
+    if (result.get("video_sha256") != video_sha256
+            or source_mismatch
+            or type(result.get("start_ms")) is not int
+            or type(result.get("end_ms")) is not int
+            or result["start_ms"] > start_ms or result["end_ms"] < end_ms
+            or result.get("status") not in ("supported", "corrected", "model_artifact")):
+        return ["Audio review result is stale, incomplete, or uncertain"]
+    stages = result.get("stages")
+    if not isinstance(stages, list) or len(stages) != 2:
+        return ["Audio review needs independent observation and comparison"]
+    for stage, expected in zip(stages, ("independent", "comparison")):
+        if (not isinstance(stage, dict) or stage.get("stage") != expected
+                or stage.get("method") != "audio_capable_model"
+                or not isinstance(stage.get("model"), str) or not stage["model"].strip()
+                or not isinstance(stage.get("prompt_version"), str)
+                or not stage["prompt_version"].strip()
+                or not isinstance(stage.get("assessment"), str)
+                or not stage["assessment"].strip()):
+            return ["Audio review stage lacks a model, prompt, or assessment"]
+        raw = stage.get("raw_response")
+        if (not isinstance(raw, str) or not (directory / raw).is_file()
+                or not (directory / raw).read_bytes()
+                or FILE_HASH(directory / raw) != stage.get("raw_response_sha256")):
+            return ["Audio review raw response is missing or stale"]
+
+    return []
+
+
+def source_interval_sha256(cues, start_ms, end_ms):
+    """Bind a source decision only to the subtitle content it actually reviews."""
+    relevant = [(cue["start"], cue["end"], cue["text"]) for cue in cues
+                if cue["start"] < end_ms and cue["end"] > start_ms]
+    encoded = json.dumps(relevant, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def splice_cues(cues, decision, duration_ms):
@@ -683,6 +838,9 @@ def record_decision(directory, decision_path):
         "issue_interval": {key: issue[key] for key in ("kind", "start_ms", "end_ms")},
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "working_before_sha256": FILE_HASH(working),
+        "source_interval_sha256": source_interval_sha256(
+            READ_CUES(working), issue["start_ms"], issue["end_ms"]
+        ),
     }
     if decision["status"] in ("resolved", "reviewed"):
         if (
@@ -693,6 +851,18 @@ def record_decision(directory, decision_path):
             raise ValueError(
                 "Review needs the current draft hash and an identified reviewer"
             )
+
+        blockers = evidence_blockers(
+            directory, evidence, issue["start_ms"], issue["end_ms"],
+            case["video_sha256"],
+        )
+        blockers.extend(review_result_blockers(
+            directory, decision.get("review_result"), issue["start_ms"],
+            issue["end_ms"], case["video_sha256"], record["working_before_sha256"],
+            record["source_interval_sha256"],
+        ))
+        if blockers:
+            raise ValueError("; ".join(blockers))
 
     if decision["status"] == "resolved":
 
@@ -718,6 +888,9 @@ def record_decision(directory, decision_path):
             shutil.copy2(working, revision / "before.srt")
             shutil.copy2(temporary, revision / "after.srt")
             record["working_after_sha256"] = FILE_HASH(temporary)
+            record["source_interval_sha256"] = source_interval_sha256(
+                READ_CUES(temporary), issue["start_ms"], issue["end_ms"]
+            )
             save_json(revision / "decision.json", record)
             os.replace(temporary, working)
         finally:
@@ -782,6 +955,8 @@ def check():
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
+        video = directory / "synthetic-video.bin"
+        video.write_bytes(b"synthetic video identity")
         working = directory / "working.tr.srt"
         WRITE_SRT(
             working,
@@ -796,6 +971,8 @@ def check():
             directory / "case.json",
             {
                 "language": "tr",
+                "video": str(video),
+                "video_sha256": FILE_HASH(video),
                 "duration_ms": 20_000,
                 "reference": str(reference),
                 "reference_sha256": FILE_HASH(reference),
@@ -805,6 +982,25 @@ def check():
         )
         evidence = directory / "review.wav"
         evidence.write_bytes(b"test-only evidence")
+        save_json(directory / "review.json", {
+            "video_sha256": FILE_HASH(video), "original_video": str(video),
+            "video_start_ms": 1000, "video_end_ms": 12_000,
+            "audio_clip": str(evidence), "audio_sha256": FILE_HASH(evidence),
+        })
+        raw = directory / "synthetic-response.txt"
+        raw.write_text("Synthetic audio model response.\n", encoding="utf-8")
+        review_result = directory / "synthetic-review.json"
+        save_json(review_result, {
+            "video_sha256": FILE_HASH(video),
+            "source_sha256": FILE_HASH(working),
+            "start_ms": 1000, "end_ms": 12_000, "status": "supported",
+            "stages": [{
+                "stage": stage, "method": "audio_capable_model",
+                "model": "synthetic-test-only", "prompt_version": "test-v1",
+                "assessment": "Synthetic fixture", "raw_response": str(raw),
+                "raw_response_sha256": FILE_HASH(raw),
+            } for stage in ("independent", "comparison")],
+        })
         decision = directory / "decision.json"
         save_json(
             decision,
@@ -813,6 +1009,7 @@ def check():
                 "status": "resolved",
                 "reason": "Synthetic edit test",
                 "evidence": ["review.wav"],
+                "review_result": str(review_result),
                 "reviewer": "self-check",
                 "expected_working_sha256": FILE_HASH(working),
                 "replace_ids": [1],

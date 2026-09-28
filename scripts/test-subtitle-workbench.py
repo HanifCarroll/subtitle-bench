@@ -13,6 +13,9 @@ from unittest.mock import patch
 
 
 TOOL = Path(__file__).with_name("subtitle-workbench.py")
+SEMANTIC = runpy.run_path(str(Path(__file__).with_name("semantic-review.py")))
+ALIGNER = runpy.run_path(str(Path(__file__).with_name("align-turkish.py")))
+PLAYBACK = runpy.run_path(str(Path(__file__).with_name("playback-check.py")))
 
 
 def run(*arguments):
@@ -23,6 +26,54 @@ def run(*arguments):
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def synthetic_audio_review(root, video, source, start_ms, end_ms, name):
+    """Create traceable synthetic responses for a gate test, never real evidence."""
+    raw = root / f"{name}-raw.txt"
+    raw.write_text("Synthetic audio review response.\n", encoding="utf-8")
+    result = root / f"{name}-review.json"
+    source_review = runpy.run_path(str(Path(__file__).with_name("source-review.py")))
+    interval_hash = source_review["source_interval_sha256"](
+        source_review["READ_CUES"](source), start_ms, end_ms
+    )
+    result.write_text(json.dumps({
+        "video_sha256": digest(video), "source_sha256": digest(source),
+        "source_interval_sha256": interval_hash,
+        "start_ms": start_ms, "end_ms": end_ms, "status": "supported",
+        "stages": [
+            {"stage": stage, "method": "audio_capable_model",
+             "model": "synthetic-test-only", "prompt_version": "test-v1",
+             "assessment": "Synthetic test response", "raw_response": str(raw),
+             "raw_response_sha256": digest(raw)}
+            for stage in ("independent", "comparison")
+        ],
+    }), encoding="utf-8")
+    return str(result)
+
+
+def synthetic_semantic_review(source, target, root):
+    """Use synthetic complete assessments to exercise only the release gate."""
+    manifest_path = root / "utterances.json"
+    manifest = SEMANTIC["prepare"](source, target, manifest_path)
+    reviews = root / "semantic-reviews"
+    reviews.mkdir()
+    for number, selected, related, context in SEMANTIC["groups"](manifest, 12):
+        inputs = SEMANTIC["review_input"](selected, related, context, [])
+        identity = SEMANTIC["fingerprint"]({
+            "model": "synthetic-test", "prompt": SEMANTIC["PROMPT"], "input": inputs,
+        })
+        assessments = [{"source_id": item["id"], "verdict": "correct"}
+                       for item in selected]
+        response = {"message": {"content": json.dumps({
+            "assessments": assessments})}}
+        (reviews / f"batch-{number:04d}.json").write_text(json.dumps({
+            "status": "complete", "model": "synthetic-test", "input_sha256": identity,
+            "prompt_version": "semantic-v1", "response": response,
+            "response_sha256": SEMANTIC["fingerprint"](response),
+            "input": inputs, "assessments": assessments,
+        }), encoding="utf-8")
+    return manifest_path, reviews
 
 
 def main():
@@ -41,6 +92,28 @@ def main():
              "Tamam anladım şimdi buraya gel birlikte gidelim sonra konuşuruz.")
     written = "Tamam anladım şimdi buraya gel birlikte gidelim sonra konuşuruz."
     assert comparison(heard, written)["issue"] == "possible_missing_or_wrong_subtitle"
+    assert comparison("Evet, ben geldim.", "Hayır, ben geldim.")["issue"] == (
+        "possible_missing_or_wrong_subtitle"
+    )
+    assert comparison("Gel buraya hemen.", "")["issue"] == (
+        "possible_missing_or_wrong_subtitle"
+    )
+    assert comparison("Merhaba.", "Merhaba ama ben buradayım.")["issue"] == (
+        "possible_unsupported_subtitle"
+    )
+    ordinary = "Bugün dışarı çıkıp arkadaşlarımızla buluştuk sonra eve dönüp yemek yaptık " \
+               "ve uzun uzun sohbet ettik yarın da aynı yerde yeniden görüşmeyi planladık."
+    assert comparison(ordinary.replace("yemek", "kahve"), ordinary)["issue"] is None
+    units = [{"id": "u1", "text": "Gel.", "start_ms": 59_500,
+              "end_ms": 60_500, "cue_ids": [1]}]
+    alignment_jobs = list(ALIGNER["windows"](units, 120_000))
+    assert len(alignment_jobs) == 1
+    assert alignment_jobs[0][0:4] == (60_000, 120_000, 58_000, 120_000)
+    uncertain_words = ALIGNER["summarize_words"](
+        {"words": [{"word": "Gel"}]}, units[0], 57_500
+    )
+    assert uncertain_words["status"] == "partial"
+    assert uncertain_words["unaligned_words"] == ["Gel"]
 
     with tempfile.TemporaryDirectory(prefix="subtitle-workbench-test-") as directory:
         root = Path(directory)
@@ -60,6 +133,12 @@ def main():
             "1\n00:00:01,000 --> 00:00:05,000\nHello.\n\n"
             "2\n00:00:05,000 --> 00:00:10,000\nWorld.\n", encoding="utf-8"
         )
+        rendered_path, rendered = PLAYBACK["check"](
+            video, source, target, root / "rendered", [10_500]
+        )
+        assert rendered_path.is_file()
+        assert rendered["render_checks_passed"]
+        assert any(not item["expected_visible"] for item in rendered["samples"])
         draft_plan = run("translate", source, root / "new-draft.en.srt",
                          "--source-language", "tr")
         assert draft_plan["source_cues"] == 1 and not (root / "new-draft.en.srt").exists()
@@ -103,6 +182,7 @@ def main():
         assert episode_summary["audio_questions"] == 1
         checked_audio = episode_output / "audio-check.json"
         audio_decisions = episode_output / "audio-decisions.json"
+        audio_bundle = run("bundle", case, target, 0, 12_000)["bundle"]
         audio_decisions.write_text(json.dumps({
             "audio_report_sha256": digest(checked_audio),
             "source_sha256": digest(case / "working.tr.srt"),
@@ -110,7 +190,10 @@ def main():
                            "disposition": "model_artifact",
                            "reason": "Synthetic comparison fixture",
                            "reviewer": "synthetic self-check",
-                           "evidence": [str(checked_audio)]}],
+                           "evidence": [audio_bundle],
+                           "review_result": synthetic_audio_review(
+                               root, video, case / "working.tr.srt", 0, 12_000,
+                               "audio-question") }],
         }), encoding="utf-8")
         episode_summary = run(
             "episode-check", case, target,
@@ -141,7 +224,7 @@ def main():
         assert all(left[1] >= right[0] for left, right in zip(windows, windows[1:]))
         inspected = run("review", case, "--issue-id", "long_cue:1")
         assert inspected["issue"]["id"] == "long_cue:1"
-        evidence = next((case / "clips").glob("*.wav"))
+        evidence = next((case / "clips").glob("*.json"))
         decision = case / "reviewed.json"
         decision.write_text(json.dumps({
             "issue_id": "long_cue:1", "status": "reviewed",
@@ -149,6 +232,9 @@ def main():
             "evidence": [str(evidence.relative_to(case))],
             "expected_working_sha256": digest(case / "working.tr.srt"),
             "reviewer": "synthetic self-check",
+            "review_result": synthetic_audio_review(
+                root, video, case / "working.tr.srt", 1_000, 10_000,
+                "source-long-cue"),
         }), encoding="utf-8")
         run("record", case, decision)
         nonspeech_issue = run("review", case)["issue"]["id"]
@@ -159,13 +245,25 @@ def main():
             "evidence": [str(evidence.relative_to(case))],
             "expected_working_sha256": digest(case / "working.tr.srt"),
             "reviewer": "synthetic self-check",
+            "review_result": synthetic_audio_review(
+                root, video, case / "working.tr.srt", 1_000, 10_000,
+                "source-nonspeech"),
         }), encoding="utf-8")
         run("record", case, decision)
         assert run("review", case)["pending"] == 0
+        semantic_manifest, semantic_reviews = synthetic_semantic_review(
+            case / "working.tr.srt", target, root
+        )
+        semantic_options = (
+            "--semantic-manifest", semantic_manifest,
+            "--semantic-reviews", semantic_reviews,
+            "--semantic-model", "synthetic-test",
+        )
         episode_summary = run(
             "episode-check", case, target,
             "--source-language", "tr", "--target-language", "en",
             "--model", "synthetic-model", "--output", episode_output,
+            *semantic_options,
         )
         assert episode_summary["installation_checks_passed"]
 
@@ -175,7 +273,136 @@ def main():
         assert summary["flags"] == 0 and summary["source_cues"] == 1
         assert summary["target_cues"] == 2
 
-        # 2. A current, structurally valid pair can be installed without a release label.
+        several_source = root / "several.tr.srt"
+        several_source.write_text(
+            "1\n00:00:01,000 --> 00:00:02,000\nBir.\n\n"
+            "2\n00:00:02,000 --> 00:00:03,000\nİki.\n\n"
+            "3\n00:00:03,000 --> 00:00:04,000\nÜç.\n", encoding="utf-8"
+        )
+        one_target = root / "one.en.srt"
+        one_target.write_text(
+            "1\n00:00:01,000 --> 00:00:04,000\nOne.\n", encoding="utf-8"
+        )
+        many_report = root / "many.json"
+        run("translation-audit", several_source, one_target, "--output", many_report)
+        assert "many_source_cues_one_target" in {
+            flag["kind"] for flag in json.loads(many_report.read_text())["flags"]
+        }
+        long_target = root / "long.en.srt"
+        long_target.write_text(
+            "1\n00:00:01,000 --> 00:00:10,000\nOne two three.\n",
+            encoding="utf-8",
+        )
+        long_report = root / "long-target.json"
+        run("translation-audit", source, long_target, "--output", long_report)
+        assert "long_target_cue" in {
+            flag["kind"] for flag in json.loads(long_report.read_text())["flags"]
+        }
+        fast_target = root / "fast.en.srt"
+        fast_target.write_text(
+            "1\n00:00:01,000 --> 00:00:02,000\nThis sentence is far too fast.\n",
+            encoding="utf-8",
+        )
+        fast_report = root / "fast-target.json"
+        run("translation-audit", source, fast_target, "--output", fast_report)
+        assert any(item["language"] == "target" for item in
+                   json.loads(fast_report.read_text())["presentation_flags"])
+        map_path = root / "many-utterances.json"
+        mapping = SEMANTIC["prepare"](several_source, one_target, map_path)
+        assert len(mapping["utterances"]) == 3
+        assert mapping["translations"][0]["source_ids"] == [
+            item["id"] for item in mapping["utterances"]
+        ]
+        assert SEMANTIC["blockers"](map_path, root / "missing-reviews",
+                                    "synthetic-test", 12) == [
+            "3 source utterances need current English semantic review"
+        ]
+        missing_link_map = root / "missing-link-utterances.json"
+        missing_link = json.loads(map_path.read_text(encoding="utf-8"))
+        missing_link["translations"][0]["source_ids"] = [
+            mapping["utterances"][0]["id"]]
+        missing_link_map.write_text(json.dumps(missing_link), encoding="utf-8")
+        assert "2 source utterances lack English links" in SEMANTIC["blockers"](
+            missing_link_map, root / "missing-reviews", "synthetic-test", 12)
+        changed_source = root / "changed.tr.srt"
+        changed_source.write_text(several_source.read_text().replace("Bir.", "Evet."),
+                                  encoding="utf-8")
+        changed_map = root / "changed-utterances.json"
+        updated = SEMANTIC["prepare"](changed_source, one_target, changed_map, map_path)
+        assert updated["utterances"][0]["id"] == mapping["utterances"][0]["id"]
+        assert SEMANTIC["review_input"](
+            updated["utterances"][:1], updated["translations"], [], []
+        ) != SEMANTIC["review_input"](
+            mapping["utterances"][:1], mapping["translations"], [], []
+        )
+        semantic_scene = root / "semantic-scene"
+        semantic_scene.mkdir()
+        scene_map, scene_reviews = synthetic_semantic_review(
+            several_source, one_target, semantic_scene
+        )
+        tampered = root / "tampered-semantic-reviews"
+        tampered.mkdir()
+        saved_batch = json.loads((scene_reviews / "batch-0001.json").read_text())
+        saved_batch["assessments"][0]["verdict"] = "material_error"
+        (tampered / "batch-0001.json").write_text(json.dumps(saved_batch))
+        assert SEMANTIC["blockers"](scene_map, tampered,
+                                    "synthetic-test", 12) == [
+            "3 source utterances need current English semantic review"
+        ]
+        assert SEMANTIC["blockers"](changed_map, scene_reviews,
+                                    "synthetic-test", 12) == [
+            "3 source utterances need current English semantic review"
+        ]
+        layout_source = root / "layout-only.tr.srt"
+        layout_source.write_text(several_source.read_text().replace(
+            "00:00:02,000 --> 00:00:03,000",
+            "00:00:02,100 --> 00:00:03,000",
+        ), encoding="utf-8")
+        layout_map = root / "layout-only-utterances.json"
+        SEMANTIC["prepare"](layout_source, one_target, layout_map, map_path)
+        assert SEMANTIC["blockers"](layout_map, scene_reviews,
+                                    "synthetic-test", 12) == []
+
+        # 2. A known provider disagreement blocks release until audio review.
+
+        disagreement_evidence = case / "provider-response.json"
+        disagreement_evidence.write_text('{"text":"synthetic conflict"}\n', encoding="utf-8")
+        disagreement = case / "evidence-disagreements.json"
+        disagreement.write_text(json.dumps({
+            "version": 1,
+            "video_sha256": digest(video),
+            "disagreements": [{
+                "id": "synthetic-word-conflict", "start_ms": 1_000,
+                "end_ms": 2_000, "summary": "Two synthetic models disagree.",
+                "evidence": [{"path": str(disagreement_evidence),
+                              "sha256": digest(disagreement_evidence)}],
+            }],
+        }), encoding="utf-8")
+        disputed = run("release", video, case / "working.tr.srt", target,
+                       "--source-language", "tr", "--target-language", "en",
+                       "--case", case, "--translation-report", translation,
+                       "--audio-report", checked_audio,
+                       "--audio-decisions", audio_decisions,
+                       "--output", root / "disputed-release.json", *semantic_options)
+        assert not disputed["installation_checks_passed"]
+        assert any("source questions need decisions" in blocker
+                   for blocker in disputed["blockers"])
+        disagreement_evidence.write_text('{"text":"changed conflict"}\n', encoding="utf-8")
+        try:
+            run("release", video, case / "working.tr.srt", target,
+                "--source-language", "tr", "--target-language", "en",
+                "--case", case, "--translation-report", translation,
+                "--audio-report", checked_audio,
+                "--audio-decisions", audio_decisions,
+                "--output", root / "tampered-dispute-release.json",
+                *semantic_options)
+        except subprocess.CalledProcessError as error:
+            assert "missing or changed evidence" in error.stderr
+        else:
+            raise AssertionError("Changed dispute evidence should stop release")
+        disagreement.unlink()
+
+        # 3. A current, structurally valid pair can be installed without a release label.
 
         report = root / "release.json"
         checked = run("release", video, case / "working.tr.srt", target,
@@ -183,7 +410,7 @@ def main():
                       "--case", case, "--translation-report", translation,
                       "--audio-report", checked_audio,
                       "--audio-decisions", audio_decisions,
-                      "--output", report)
+                      "--output", report, *semantic_options)
         assert checked["installation_checks_passed"]
         assert "ready" not in json.loads(report.read_text())
         assert "provisional" not in json.loads(report.read_text())
@@ -196,6 +423,8 @@ def main():
             source_language="tr", target_language="en", case=case,
             translation_report=translation, audio_report=checked_audio,
             audio_decisions=audio_decisions, output=root / "urgent-release.json",
+            semantic_manifest=semantic_manifest, semantic_reviews=semantic_reviews,
+            semantic_model="synthetic-test", semantic_batch_size=12, glossary=None,
             apply=False, backup_dir=None,
         )
         with patch.dict(release_function.__globals__, {
@@ -231,6 +460,18 @@ def main():
         translation.write_text(original_translation, encoding="utf-8")
         assert not json.loads(urgent_args.output.read_text())["installation_checks_passed"]
 
+        partial_audio = root / "partial-audio.json"
+        partial_report = json.loads(checked_audio.read_text())
+        partial_report["end_ms"] = 6_000
+        partial_report["windows"][0]["end_ms"] = 6_000
+        partial_report["issues"] = []
+        partial_audio.write_text(json.dumps(partial_report), encoding="utf-8")
+        partial_args = Namespace(**{**vars(urgent_args), "audio_report": partial_audio,
+                                    "output": root / "partial-release.json"})
+        release_function(partial_args)
+        assert any("audio scan" in blocker.lower() for blocker in
+                   json.loads(partial_args.output.read_text())["blockers"])
+
         assert len(json.loads(report.read_text())["playback_samples"]) == 1
         assert installed_source.read_text() == "old source\n"
         assert installed_target.read_text() == "old target\n"
@@ -253,6 +494,8 @@ def main():
             source_language="tr", target_language="en", case=case,
             translation_report=translation, audio_report=checked_audio,
             audio_decisions=audio_decisions, output=root / "failed-release.json",
+            semantic_manifest=semantic_manifest, semantic_reviews=semantic_reviews,
+            semantic_model="synthetic-test", semantic_batch_size=12, glossary=None,
             apply=True, backup_dir=root / "failed-backup",
         )
         with patch("os.replace", side_effect=fail_second_replace):
@@ -273,7 +516,7 @@ def main():
                         "--case", case, "--translation-report", translation,
                         "--audio-report", checked_audio,
                         "--audio-decisions", audio_decisions,
-                        "--output", report,
+                        "--output", report, *semantic_options,
                         "--apply", "--backup-dir", backup)
         assert installed["installed"]
         assert installed_source.read_bytes() == (case / "working.tr.srt").read_bytes()
@@ -318,6 +561,8 @@ def main():
             "replace_source_ids": [1], "replace_target_ids": [1, 2],
             "reviewer": "synthetic self-check", "reason": "Split a held cue",
             "evidence": [bundled["bundle"]],
+            "review_result": synthetic_audio_review(
+                root, video, working_pair, 1_000, 10_000, "paired-replacement"),
             "cues": [
                 {"start_ms": 1000, "end_ms": 5000,
                  "source_text": "Merhaba.", "target_text": "Hello."},
@@ -395,6 +640,21 @@ def main():
         assert spans[-1]["end_ms"] >= 95_000
         assert all(left["end_ms"] >= right["start_ms"]
                    for left, right in zip(spans, spans[1:]))
+        first_clip = str(next((long_case / "clips").glob("*.json")).relative_to(long_case))
+        assert runpy.run_path(str(TOOL))["SOURCE_REVIEW"]["evidence_blockers"](
+            long_case, [first_clip], 2_000, 95_000, digest(long_video)
+        )
+
+        held_source = root / "held.tr.srt"
+        held_source.write_text(
+            "1\n00:00:20,000 --> 00:01:01,000\nAyyy!\n", encoding="utf-8"
+        )
+        held_case = root / "held-case"
+        run("audit", long_video, held_source, held_case, "--language", "tr")
+        held_review = run("review", held_case, "--issue-id", "long_cue:1")
+        held_spans = held_review["review_windows"]
+        assert held_spans[0]["start_ms"] <= 20_000
+        assert held_spans[-1]["end_ms"] >= 61_000
 
         # 8. A confirmed speech gap receives valid, hash-bound cues in both tracks.
 
@@ -412,6 +672,9 @@ def main():
             "reason": "Synthetic confirmed speech", "evidence": [
                 str(next((long_case / "clips").glob("*.wav")).relative_to(long_case))
             ],
+            "review_result": synthetic_audio_review(
+                root, long_video, long_case / "working.tr.srt", 10_000, 12_000,
+                "paired-insertion"),
             "cues": [{"start_ms": 10_000, "end_ms": 12_000,
                       "source_text": "Konuşma.", "target_text": "Speech."}],
         }
@@ -440,6 +703,11 @@ def main():
         review_decision.update({
             "status": "reviewed", "reviewer": "synthetic self-check",
             "expected_working_sha256": digest(long_case / "working.tr.srt"),
+            "evidence": [str(path.relative_to(long_case))
+                         for path in (long_case / "clips").glob("*.json")],
+            "review_result": synthetic_audio_review(
+                root, long_video, long_case / "working.tr.srt", 12_000, 95_000,
+                "remaining-gap"),
         })
         pair.write_text(json.dumps(review_decision), encoding="utf-8")
         run("record", long_case, pair)

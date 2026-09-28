@@ -142,6 +142,40 @@ class SecondOpinionTests(unittest.TestCase):
         self.assertEqual(result, ["I'm ready", "Go now"])
         self.assertEqual(requests[0]["q"], [cue["text"] for cue in source])
 
+    def test_explicit_links_support_independent_english_cues(self):
+        self.source.write_text(
+            "1\n00:00:01,000 --> 00:00:02,000\nMerhaba.\n\n"
+            "2\n00:00:02,000 --> 00:00:03,000\nNasılsın?\n", encoding="utf-8")
+        self.draft.write_text(
+            "1\n00:00:01,000 --> 00:00:03,000\nHello. How are you?\n",
+            encoding="utf-8")
+        mapping = self.source.with_suffix(".utterances.json")
+        semantic = runpy.run_path(str(Path(__file__).with_name("semantic-review.py")))
+        manifest = semantic["prepare"](self.source, self.draft, mapping)
+        manifest["translations"][0]["source_ids"] = [
+            unit["id"] for unit in manifest["utterances"]]
+        manifest["translations"][0]["link_status"] = "confirmed"
+        mapping.write_text(json.dumps(manifest), encoding="utf-8")
+        self.args.utterance_map = mapping
+
+        requests = []
+        def translate(cues, language, project):
+            requests.append([cue["id"] for cue in cues])
+            return ["Hello", "How are you?"]
+
+        self.args.run = True
+        self.args.max_source_characters = 100
+        with patch.dict(RUN.__globals__, {"google_translate": translate}):
+            with contextlib.redirect_stdout(io.StringIO()):
+                RUN(self.args)
+
+        report = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(len(requests[0]), 2)
+        self.assertEqual(len(report["rows"]), 2)
+        self.assertEqual(report["rows"][0]["english_draft"],
+                         "Hello. How are you?")
+        self.assertEqual(report["rows"][1]["link_status"], "confirmed")
+
 
 if __name__ == "__main__":
     unittest.main()
