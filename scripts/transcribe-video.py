@@ -59,13 +59,18 @@ def checked_srt(path):
 
 
 def run_clip(clip, index, output, video, language, model, vad_model, ffmpeg, whisper):
-    # 1. Keep completed clips on resume, but validate their subtitle format.
+    # 1. Reuse only a completed, unchanged clip. A partial SRT is not a receipt.
 
     prefix = output / "clips" / f"{index:03}"
     srt = prefix.with_suffix(".srt")
-    if srt.exists():
+    receipt = prefix.with_suffix(".complete.json")
+    if receipt.exists():
+        saved = json.loads(receipt.read_text(encoding="utf-8"))
+        if not srt.exists() or saved.get("srt_sha256") != file_hash(srt):
+            raise ValueError(f"Completed clip changed: {srt}")
         checked_srt(srt)
         return srt
+    srt.unlink(missing_ok=True)
 
     wav = prefix.with_suffix(".wav")
     with prefix.with_suffix(".log").open("w", encoding="utf-8") as log:
@@ -88,6 +93,10 @@ def run_clip(clip, index, output, video, language, model, vad_model, ffmpeg, whi
     if not srt.exists():
         srt.write_text("", encoding="utf-8")
     checked_srt(srt)
+    receipt.write_text(json.dumps({
+        "index": index, "clip": clip, "srt_sha256": file_hash(srt),
+        "empty_transcript": srt.stat().st_size == 0,
+    }, indent=2) + "\n", encoding="utf-8")
     wav.unlink()
     return srt
 
@@ -114,7 +123,9 @@ def prepare_run(args):
         "duration_ms": duration_ms, "language": args.language.lower(),
         "model": str(model), "model_size": model.stat().st_size,
         "model_mtime_ns": model.stat().st_mtime_ns,
+        "model_sha256": file_hash(model),
         "vad_model": str(vad_model) if vad_model else None,
+        "vad_model_sha256": file_hash(vad_model) if vad_model else None,
         "chunk_ms": round(args.chunk_seconds * 1000),
         "overlap_ms": round(args.overlap_seconds * 1000),
     }
@@ -150,10 +161,15 @@ def transcribe(args):
     manifest.write_text(json.dumps({"video": run["video"],
                                     "language": run["language"], "clips": clips},
                                    indent=2) + "\n", encoding="utf-8")
+    manifest_sha256 = file_hash(manifest)
 
     # 3. Keep both versions of every boundary phrase in the review draft.
 
     joined = output / "joined"
+    joined_receipt = joined / "manifest.sha256"
+    if joined.exists() and (not joined_receipt.exists()
+                            or joined_receipt.read_text().strip() != manifest_sha256):
+        raise ValueError(f"Joined output is stale or unbound; preserve it and use a new run: {joined}")
     if not joined.exists():
         if len(clips) > 1:
             subprocess.run([sys.executable,
@@ -167,13 +183,17 @@ def transcribe(args):
                             "language": run["language"], "seams": []}, indent=2) + "\n",
                 encoding="utf-8",
             )
+        joined_receipt.write_text(manifest_sha256 + "\n", encoding="utf-8")
 
     if not (joined / f"draft.{run['language']}.srt").is_file() or not (joined / "seam-review.json").is_file():
         raise ValueError(f"Joined output is incomplete; inspect it before retrying: {joined}")
 
     print(json.dumps({"draft": str(joined / f"draft.{run['language']}.srt"),
                       "seam_review": str(joined / "seam-review.json"),
-                      "clips": len(clips)}))
+                      "clips": len(clips),
+                      "empty_clip_indices": [i for i in range(len(clips)) if json.loads(
+                          (output / "clips" / f"{i:03}.complete.json").read_text()
+                      )["empty_transcript"]]}))
 
 
 def check():

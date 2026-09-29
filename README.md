@@ -1,6 +1,6 @@
 # Subtitle workbench
 
-Subtitle Bench contains the agent-operated subtitle workflow. Start with [WORKBENCH.md](WORKBENCH.md) for commands and [SUBTITLE-PIPELINE.md](SUBTITLE-PIPELINE.md) for the review procedure. Run commands from this repository with `python3 scripts/subtitle-workbench.py`.
+Subtitle Bench develops and qualifies a reusable agent-operated subtitle-production process for unseen Turkish episodes. Start with [PROCESS.md](PROCESS.md) for the current strategy, [WORKBENCH.md](WORKBENCH.md) for commands, and [qualification/PROTOCOL.md](qualification/PROTOCOL.md) for held-out testing. Individual episodes are cases, not the project's deliverable. Run workbench commands from this repository with `python3 scripts/subtitle-workbench.py`.
 
 The code and procedure are versioned here. Episode videos, commercial subtitle files, model caches, audio clips, review cases, provider credentials, and installation backups remain in the local `~/Movies/Leyla ile Mecnun/Workflow` workspace. Pass their paths to the commands; do not copy them into this repository.
 
@@ -22,4 +22,5 @@ python3 scripts/test-layout-cues.py
 python3 scripts/test-layout-audit.py
 python3 scripts/test-semantic-review.py
 python3 scripts/test-elevenlabs-scribe-trial.py
+python3 scripts/test-production-paths.py
 ```

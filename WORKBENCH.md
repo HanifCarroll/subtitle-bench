@@ -1,16 +1,17 @@
 # One-episode subtitle workbench
 
-Use `scripts/subtitle-workbench.py` from this repository as the entry point for one video's source and English subtitles. It keeps the video and existing sidecars unchanged until `release --apply`. Case files, transcripts, decisions, reports, and backups stay outside the code repository.
+Use `PROCESS.md` for the current production strategy and `scripts/subtitle-workbench.py` as the entry point for one video's source and English subtitles. It keeps the video and existing sidecars unchanged until `release --apply`. Case files, transcripts, decisions, reports, and backups stay outside the code repository.
 
 The agent runs the process. Hanif does not need to listen to routine clips. Recognition and automated flags provide evidence; they can miss quiet speech, invent song words, or loop. The endpoint is an installed Turkish/English pair that can be watched. A queue entry or an unanswered lyric question is not an endpoint. A reported playback problem returns to the repair loop below.
 
 ## 1. Prepare the source draft
 
-Inventory the video, its language, and actual subtitle files on disk. Check each candidate's episode, cut, encoding, and timing. Use a cut-matched source subtitle as the working draft when it fits. Otherwise, make a local Whisper draft from the original audio:
+Inventory the video, its language, and actual subtitle files on disk. Check each candidate's episode, cut, encoding, and timing. Use `reference-source.py` with an independent video-clock transcript to propose a cut alignment, then check original audio before using the source subtitle as the working draft. Otherwise, make a local Whisper large-v3 draft from the original audio in 30-second cores:
 
 ```sh
 python3 scripts/subtitle-workbench.py transcribe VIDEO.webm TRANSCRIPTION-CASE \
-  --language tr --model /path/to/ggml-large-v3-turbo.bin
+  --language tr --model /path/to/ggml-large-v3.bin \
+  --chunk-seconds 30 --overlap-seconds 2
 ```
 
 This retains raw overlapping clips and seam evidence. The joined draft is a candidate. Keep input origin and hashes. An English subtitle cannot establish the exact Turkish words.

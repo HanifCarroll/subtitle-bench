@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "created_at": "2026-09-29T11:52:13.782839+00:00",
+  "agent_model": "gpt-5.6-luna",
+  "reasoning_effort": "max",
+  "cases": [
+    {
+      "episode_id": "016",
+      "mode": "video_only"
+    },
+    {
+      "episode_id": "064",
+      "mode": "paired_candidates"
+    },
+    {
+      "episode_id": "099",
+      "mode": "source_candidate"
+    }
+  ],
+  "source_settings": {
+    "whisper_model": "large-v3",
+    "chunk_seconds": 30,
+    "overlap_seconds": 2,
+    "language": "tr"
+  },
+  "independent_asr": {
+    "model": "mlx-community/Qwen3-ASR-1.7B-4bit",
+    "revision": "78a389c776a5483b2d0d4ea5494e11012e0d6159",
+    "window_seconds": 30
+  },
+  "alignment": {
+    "whisperx": "3.8.6",
+    "turkish_model": "mpoyraz/wav2vec2-xls-r-300m-cv7-turkish",
+    "revision": "708639f50559d7970f462e13ec64d3f059ca89f6"
+  },
+  "authorization": "no_billable_provider_use",
+  "workflow_sha256": {
+    "AGENTS.md": "1eac83bacf3487b51102547cb454eb03140482b9ef02383b3a37d884964e3199",
+    "README.md": "cab9037eefef0a3c6c954f6722f4b2faf6893cda1b7249f5a65104b05355aff4",
+    "SETUP.md": "eb8da8dff5e90db13e7aa5a7e6458b9a74fb27ed739f9ea33cfab123bea95858",
+    "WORKBENCH.md": "48787106728f9d4fac3790d4e8c9770d390e781069c095ab13afc2f70a4ef214",
+    "SUBTITLE-PIPELINE.md": "5255f1d1b7d9ae912656d652577c6c09f67a68cb07ce712b21948167da1a3313",
+    "PROCESS.md": "52c71dba4315f78c6f4da213c626ff33bf8f495620e1ee0090432332523cbd8a",
+    "qualification/PROTOCOL.md": "5847e630ea177a180b575e3e5402e3042434d2c91b0a33254146b7a6c352b849",
+    "qualification/AGENT-PROMPT.md": "2c2adc813599502cc48786eac5039eca447a249568955d57f87c32d2069760fa",
+    "scripts/align-turkish.py": "2ac306b3c4670293470a40edff3df79d291959eb6fb1f4a5f94e1c33851410c6",
+    "scripts/audit-speech-coverage.py": "06a7e3de7a45609b596d8852505aff6544a1d230d0f2117dda4e2804dc24c27c",
+    "scripts/elevenlabs-scribe-trial.py": "23ac4ced3751e18d5135149917015bd8741b03eede8f5c2852b2717514a60ffd",
+    "scripts/gemini-audio-review.py": "ffe13288b7b9280ddf311cdb51b9f153a525702273c6614cec1612767448a247",
+    "scripts/google-second-opinion.py": "0a83ee66ac69e0be934f6154ef255e107b7dc5566f5e555ab48f4284d3596586",
+    "scripts/join-clip-drafts.py": "afe429c9ee5351c310ffa4155bdb218a167ca3d550c83e2ecd58a00c03348d76",
+    "scripts/layout-audit.py": "d79f7cd4375ad8c522a8aded1c71e57a7d9e0bd650433775f37128b1d4416f44",
+    "scripts/layout-cues.py": "9dddedfd363a83adc9bb850a313baeaa225f601f2c60288826a062350daa9b1a",
+    "scripts/playback-check.py": "2e2e214991f9561f0777af8ac844022ada520798fd7c9069f2754fd8eaab8962",
+    "scripts/qualification-runner.py": "6f5cc2b59324d47f7d3e216a773ce557376c5f29ddcf98ba7933ec9a9ab2ebdd",
+    "scripts/reference-source.py": "178749f598f141e872f8b2ee936179b6ae61eb6adcee4d8263312e9f49760dde",
+    "scripts/semantic-review.py": "5724bbf9f2353c4c0dee5b3011b246f2717c88f30ea72af0e0eea749c196470b",
+    "scripts/source-review.py": "23135afa32c9a2b74197e3a9489ea69d6903e587472b647d78f5510dae2a6300",
+    "scripts/subtitle-timing.py": "89055642b8baf79b7f315dfe8fc0e59b65d142bc5e2b1f263baf6456d1e99bbd",
+    "scripts/subtitle-workbench.py": "db3aad3fed09fd1f2addaf0468c232eb1f28f6497013667bde8e061ccb7c4d51",
+    "scripts/test-elevenlabs-scribe-trial.py": "226478b6e07a0529d4db7b4e2bb107a8ca7ef298efe27b8ef95ec4ad6768cc4e",
+    "scripts/test-google-second-opinion.py": "b59a7fa801370d4e2399db8d261bff167974cd032d4e0ea3a47f0f7c3c88250c",
+    "scripts/test-layout-audit.py": "677bfed8f47d4358cf05b081aef13d47650401329493d689d6b5de4d41891060",
+    "scripts/test-layout-cues.py": "6b1e9fc486853f7fc6838b97d339673b6140a30ceb42a2904d2b6e594c5c87c5",
+    "scripts/test-production-paths.py": "aa469238101cad7a26ff5012178975eea944c5a00db87b2e997a9127f8a414bd",
+    "scripts/test-semantic-review.py": "a95ed32412a545d23f2156868b1bd7e0dccf21b7348800200cf740e8bf1adeaa",
+    "scripts/test-subtitle-workbench.py": "bfd653397252bf1b3e8179d889fc5da88a676be1b4ba1d9c41852700a82c3bec",
+    "scripts/test-translate-subtitles.py": "29ae65b42bb0260b2c2f6dcbaab183f322ea42c5e878c5ad0bb97a1c5da5ae17",
+    "scripts/transcribe-video.py": "ab07a1c32d2e3099c45909bb46684e8fd7912551c0fa5fac56324928e1ce6a6e",
+    "scripts/translate-subtitles.py": "a22d1ee196b6ddbf9ebb79d3d291ec2ae9d820e83e3120e609718e3ea8ec7d4c"
+  },
+  "model_files": [
+    {
+      "path": "/Users/hanifcarroll/.local/share/transcribe-audio/models/ggml-large-v3.bin",
+      "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+    }
+  ]
+}

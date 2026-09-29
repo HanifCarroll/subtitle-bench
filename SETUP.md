@@ -8,6 +8,7 @@ These are the versions observed on the 2026-09-28 Mac pilot, rather than a claim
 | Python | 3.14.5 | Standard-library CLI and offline checks |
 | FFmpeg / ffprobe | `ffmpeg-full` 8.1.2 with libass | Clip extraction and actual frame rendering |
 | whisper.cpp | 1.9.1 | Existing baseline transcription |
+| Whisper large-v3 | `ggml-large-v3.bin`, locally hashed by `qualification/freeze.json` | Stronger initial source transcription in the qualification route |
 | Ollama | 0.32.5 | Historical local semantic trials; not used for current text review |
 | `mlx-audio` | 0.5.6 | Local Qwen3 ASR episode windows |
 | Qwen3 ASR 1.7B 4-bit | `mlx-community/Qwen3-ASR-1.7B-4bit`, cached revision `78a389c776a5483b2d0d4ea5494e11012e0d6159` | Independent Turkish recognition |
@@ -17,6 +18,8 @@ These are the versions observed on the 2026-09-28 Mac pilot, rather than a claim
 | VideoLingo | commit `11ca23e`, Apache-2.0 | Isolated local transcription-stage comparison |
 
 The normal workbench and tests use the Python standard library. Keep model environments separate from the code repository and media workspace. Do not copy model weights, commercial subtitles, clips, provider responses, or credentials into Git. Before a new run, verify the executable and model versions in the chosen environment; the current default shell Python does **not** import WhisperX or `mlx-audio`.
+
+The current qualification environment additionally needs the 2.9 GB large-v3 model at `/Users/hanifcarroll/.local/share/transcribe-audio/models/ggml-large-v3.bin`. `qualification-runner.py verify` checks its exact hash and the frozen workflow files before a held-out run.
 
 ```sh
 python3 --version
