@@ -1,5 +1,7 @@
 # Recovery capability checkpoint — 2026-09-29
 
+**Historical checkpoint:** The proposed Gemini calls below were later authorized and completed. See [the bounded recovery results](RECOVERY-RESULTS-2026-09-29.md) for current outcomes and readiness.
+
 The qualification campaign is paused. The v1 and v2 first-run ledgers remain in `qualification/RESULTS-v1.md` and `qualification/RESULTS-v2.md`; the v2 freeze and all media caches remain untouched. Episode 77 was stopped at a safe boundary and is **user-paused, outcome untested**. No further full-episode recognition or qualification run was started. The goal of this checkpoint is a working recovery route on representative intervals, not another episode result.
 
 Private case evidence is under `/Users/hanifcarroll/Movies/Leyla ile Mecnun/Workflow/pilots/recovery-capability-2026-09-29/` (called `RECOVERY` below). The older provider receipts, reference checks, and historical candidate pair are under `/Users/hanifcarroll/Movies/Leyla ile Mecnun/Workflow/pilots/subtitle-bench-next-2026-09-28/` (called `PILOT`). These are development artifacts. Provider outputs are provisional model observations; a rendered frame proves visibility, not spoken-word accuracy or audio sync.

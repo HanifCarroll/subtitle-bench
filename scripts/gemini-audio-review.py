@@ -255,6 +255,12 @@ def two_stage_review(client, plan_path, plan, selected):
                 prompt_path = output / f"{label}-{stage}-prompt.txt"
                 raw_path = output / f"{label}-{stage}-raw.txt"
                 prompt_path.write_text(prompt, encoding="utf-8")
+                record[f"{stage}_prompt"] = str(prompt_path)
+                record[f"{stage}_prompt_sha256"] = file_hash(prompt_path)
+                record[f"{stage}_prompt_bytes"] = len(prompt.encode("utf-8"))
+                record["model_calls_attempted"] = record.get("model_calls_attempted", 0) + 1
+                record["status"] = f"{stage}_requesting"
+                save_json(receipt, record)
                 request = {"model": plan["model"],
                            "input": [{"type": "text", "text": prompt},
                                      {"type": "audio", "uri": uploaded.uri,
@@ -264,9 +270,6 @@ def two_stage_review(client, plan_path, plan, selected):
                         "max_output_tokens": plan["max_output_tokens"]}
                 response = client.interactions.create(**request)
                 raw_path.write_text(response.output_text or "", encoding="utf-8")
-                record[f"{stage}_prompt"] = str(prompt_path)
-                record[f"{stage}_prompt_sha256"] = file_hash(prompt_path)
-                record[f"{stage}_prompt_bytes"] = len(prompt.encode("utf-8"))
                 record[f"{stage}_raw_response"] = str(raw_path)
                 record[f"{stage}_raw_sha256"] = file_hash(raw_path)
                 record[f"{stage}_response_id"] = response.id
@@ -277,6 +280,8 @@ def two_stage_review(client, plan_path, plan, selected):
                         mode="json", exclude_none=True)
                 elif isinstance(usage, dict):
                     record[f"{stage}_usage"] = usage
+                record["status"] = f"{stage}_response_saved"
+                save_json(receipt, record)
                 if response.output_text:
                     record[f"{stage}_parsed"] = parsed_response(response.output_text)
                 record["status"] = f"{stage}_complete"
@@ -284,9 +289,16 @@ def two_stage_review(client, plan_path, plan, selected):
                 if not response.output_text:
                     raise ValueError(f"Gemini returned empty {stage} output for {label}")
         finally:
-            client.files.delete(name=uploaded.name)
-            record["provider_file_deleted"] = True
-            save_json(receipt, record)
+            try:
+                client.files.delete(name=uploaded.name)
+            except Exception as error:
+                record["provider_file_deleted"] = False
+                record["provider_file_deletion_error"] = str(error)
+                save_json(receipt, record)
+                raise
+            else:
+                record["provider_file_deleted"] = True
+                save_json(receipt, record)
 
         record["status"] = "complete"
         save_json(receipt, record)
@@ -319,7 +331,12 @@ def main():
             return
         if args.apply:
             from google import genai
-            two_stage_review(genai.Client(), args.plan, plan, selected)
+            from google.genai import types
+            # The SDK otherwise retries model calls after transient errors.
+            # One attempt per request keeps the planned call count exact.
+            client = genai.Client(http_options=types.HttpOptions(
+                retry_options=types.HttpRetryOptions(attempts=1)))
+            two_stage_review(client, args.plan, plan, selected)
         return
 
     video = Path(plan["video"]).resolve(strict=True)
