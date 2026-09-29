@@ -233,11 +233,47 @@ def source_decision_blockers(case_directory, queue, pending, source, video_sha25
     return []
 
 
+def audio_entry_blockers(entry, issue, source_cues, source_sha256, video_sha256,
+                         decisions_directory, interval_bound):
+    """Validate one audio decision without consulting other questions."""
+    if not isinstance(entry, dict):
+        return ["Audio decision is malformed"]
+    start, end = entry.get("start_ms"), entry.get("end_ms")
+    if issue is None:
+        return [f"Audio decision {start}-{end} names an obsolete question"]
+    if interval_bound:
+        interval_hash = SOURCE_REVIEW["source_interval_sha256"](
+            source_cues, start, end
+        )
+        if (entry.get("issue_sha256") != SEMANTIC["fingerprint"](issue)
+                or entry.get("source_interval_sha256") != interval_hash):
+            return [f"Audio decision {start}-{end} is stale"]
+    if (entry.get("disposition") not in ("source_supported", "model_artifact", "repaired")
+            or not isinstance(entry.get("reason"), str) or not entry["reason"].strip()
+            or not isinstance(entry.get("reviewer"), str) or not entry["reviewer"].strip()
+            or not isinstance(entry.get("evidence"), list) or not entry["evidence"]
+            or any(not isinstance(path, str) or not (decisions_directory / path).is_file()
+                   for path in entry["evidence"])):
+        return [f"Audio decision {start}-{end} is incomplete or has invalid evidence"]
+    interval_hash = SOURCE_REVIEW["source_interval_sha256"](
+        source_cues, start, end
+    )
+    blockers = SOURCE_REVIEW["evidence_blockers"](
+        decisions_directory, entry["evidence"], start, end, video_sha256,
+    )
+    blockers.extend(SOURCE_REVIEW["review_result_blockers"](
+        decisions_directory, entry.get("review_result"), start, end,
+        video_sha256, source_sha256, interval_hash,
+    ))
+    return [f"Audio decision {start}-{end}: {'; '.join(blockers)}"] if blockers else []
+
+
 def audio_decision_blockers(audio_path, decisions_path, source, video):
-    """Require an explicit agent decision for each independent ASR question."""
+    """Require a current valid decision for each independent ASR question."""
     audio = json.loads(audio_path.read_text(encoding="utf-8"))
-    if (audio.get("source_sha256") != file_hash(source)
-            or audio.get("video_sha256") != file_hash(video)):
+    source_sha256, video_sha256 = file_hash(source), file_hash(video)
+    if (audio.get("source_sha256") != source_sha256
+            or audio.get("video_sha256") != video_sha256):
         return ["Audio comparison is stale"]
     if not decisions_path.is_file():
         return ["Audio decisions are missing"] if audio["issues"] else []
@@ -245,10 +281,10 @@ def audio_decision_blockers(audio_path, decisions_path, source, video):
     decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
     interval_bound = decisions.get("version") == 2
     if interval_bound:
-        if decisions.get("video_sha256") != file_hash(video):
+        if decisions.get("video_sha256") != video_sha256:
             return ["Audio decisions belong to another video"]
     elif (decisions.get("audio_report_sha256") != file_hash(audio_path)
-            or decisions.get("source_sha256") != file_hash(source)):
+            or decisions.get("source_sha256") != source_sha256):
         return ["Audio decisions do not match the current comparison"]
     entries = decisions.get("decisions")
     if not isinstance(entries, list):
@@ -257,42 +293,26 @@ def audio_decision_blockers(audio_path, decisions_path, source, video):
                 for item in audio["issues"]}
     current_cues = read_cues(source)
     recorded = set()
+    blockers = []
     for entry in entries:
         if not isinstance(entry, dict):
-            return ["Audio decision is malformed"]
+            blockers.append("Audio decision is malformed")
+            continue
         key = (entry.get("start_ms"), entry.get("end_ms"))
-        evidence = entry.get("evidence")
-        if interval_bound and key in expected:
-            interval_hash = SOURCE_REVIEW["source_interval_sha256"](
-                current_cues, key[0], key[1]
-            )
-            if (entry.get("issue_sha256") != SEMANTIC["fingerprint"](expected[key])
-                    or entry.get("source_interval_sha256") != interval_hash):
-                return [f"Audio decision {key[0]}-{key[1]} is stale"]
-        if (key not in expected or key in recorded
-                or entry.get("disposition") not in ("source_supported", "model_artifact", "repaired")
-                or not isinstance(entry.get("reason"), str) or not entry["reason"].strip()
-                or not isinstance(entry.get("reviewer"), str) or not entry["reviewer"].strip()
-                or not isinstance(evidence, list) or not evidence
-                or any(not isinstance(path, str) or not Path(path).is_file()
-                       for path in evidence)):
-            return ["Audio decision is incomplete or has invalid evidence"]
-        blockers = SOURCE_REVIEW["evidence_blockers"](
-            decisions_path.parent, evidence, key[0], key[1], file_hash(video),
-        )
-        blockers.extend(SOURCE_REVIEW["review_result_blockers"](
-            decisions_path.parent, entry.get("review_result"), key[0], key[1],
-            file_hash(video), file_hash(source),
-            SOURCE_REVIEW["source_interval_sha256"](
-                current_cues, key[0], key[1]
-            ),
+        if key in recorded:
+            blockers.append(f"Audio decision {key[0]}-{key[1]} is duplicated")
+            continue
+        if key in expected:
+            recorded.add(key)
+        blockers.extend(audio_entry_blockers(
+            entry, expected.get(key), current_cues, source_sha256,
+            video_sha256, decisions_path.parent, interval_bound,
         ))
-        if blockers:
-            return [f"Audio decision {key[0]}-{key[1]}: {'; '.join(blockers)}"]
-        recorded.add(key)
 
     missing = set(expected) - recorded
-    return [f"{len(missing)} audio questions need decisions"] if missing else []
+    if missing:
+        blockers.append(f"{len(missing)} audio questions need decisions")
+    return blockers
 
 
 def audio_scan_blockers(audio, duration_ms):
@@ -366,17 +386,35 @@ def audio_adjudicate(args):
         data = {"version": 2, "video_sha256": file_hash(video), "decisions": []}
     if not isinstance(data.get("decisions"), list):
         raise ValueError("Audio decisions must be a list")
-    prior_entries = list(data["decisions"])
-    entries = [item for item in data["decisions"]
-               if (item.get("start_ms"), item.get("end_ms")) != (start, end)]
+    if not isinstance(data.get("history", []), list):
+        raise ValueError("Audio decision history must be a list")
+    blockers = audio_entry_blockers(
+        entry, issue, read_cues(source), file_hash(source), file_hash(video),
+        args.output.parent, True,
+    )
+    if blockers:
+        raise ValueError("Audio decision is invalid: " + "; ".join(blockers))
+    current_keys = {(item["start_ms"], item["end_ms"])
+                    for item in audio["issues"]}
+    entries = []
+    history = list(data.get("history", []))
+    for prior in data["decisions"]:
+        prior_key = ((prior.get("start_ms"), prior.get("end_ms"))
+                     if isinstance(prior, dict) else None)
+        if prior_key == (start, end):
+            reason = "superseded"
+        elif prior_key not in current_keys:
+            reason = "question_disappeared"
+        else:
+            entries.append(prior)
+            continue
+        history.append({"reason": reason,
+                        "archived_at": datetime.now(timezone.utc).isoformat(),
+                        "entry": prior})
     data["decisions"] = entries + [entry]
+    data["history"] = history
     save_json(args.output, data)
     blockers = audio_decision_blockers(audio_path, args.output, source, video)
-    if blockers and not (len(blockers) == 1 and
-                         blockers[0].endswith("audio questions need decisions")):
-        data["decisions"] = prior_entries
-        save_json(args.output, data)
-        raise ValueError("Audio decision is invalid: " + "; ".join(blockers))
     print(json.dumps({"decisions": str(args.output), "remaining": blockers}))
 
 

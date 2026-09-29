@@ -309,6 +309,67 @@ def main():
         assert scan["audio_decision_blockers"](
             local_report_path, local_decisions, interval_source, video
         )
+        incremental_source = root / "incremental-source.tr.srt"
+        incremental_source.write_text(
+            "1\n00:00:01,000 --> 00:00:05,000\nBirinci.\n\n"
+            "2\n00:00:07,000 --> 00:00:11,000\nİkinci.\n", encoding="utf-8")
+        a = {**checked_data["windows"][0], "start_ms": 0, "end_ms": 6_000,
+             "source_text": "Birinci.", "text": "Birinci?", "status": "questionable",
+             "issue": "possible_missing_or_wrong_subtitle"}
+        b = {**a, "start_ms": 6_000, "end_ms": 12_000,
+             "source_text": "İkinci.", "text": "İkinci?"}
+        incremental_report = {**checked_data, "source": str(incremental_source),
+                              "source_sha256": digest(incremental_source),
+                              "windows": [a, b], "issues": [a, b]}
+        incremental_report_path = root / "incremental-audio-report.json"
+        incremental_report_path.write_text(json.dumps(incremental_report),
+                                           encoding="utf-8")
+        incremental_decisions = root / "incremental-decisions.json"
+
+        def save_audio_decision(issue, name):
+            decision_path = root / f"{name}-decision.json"
+            decision_path.write_text(json.dumps({
+                "start_ms": issue["start_ms"], "end_ms": issue["end_ms"],
+                "disposition": "model_artifact", "reason": "Synthetic fixture",
+                "reviewer": "synthetic self-check", "evidence": [audio_bundle],
+                "review_result": synthetic_audio_review(
+                    root, video, incremental_source, issue["start_ms"],
+                    issue["end_ms"], name),
+            }), encoding="utf-8")
+            return run("audio-adjudicate", incremental_report_path,
+                       incremental_decisions, decision_path)
+
+        save_audio_decision(a, "initial-a")
+        save_audio_decision(b, "initial-b")
+        incremental_source.write_text(incremental_source.read_text()
+                                      .replace("Birinci.", "Yeni birinci.")
+                                      .replace("İkinci.", "Yeni ikinci."),
+                                      encoding="utf-8")
+        a["source_text"], b["source_text"] = "Yeni birinci.", "Yeni ikinci."
+        incremental_report["source_sha256"] = digest(incremental_source)
+        incremental_report_path.write_text(json.dumps(incremental_report),
+                                           encoding="utf-8")
+        assert len(scan["audio_decision_blockers"](
+            incremental_report_path, incremental_decisions,
+            incremental_source, video)) == 2
+        assert any("6000-12000 is stale" in blocker for blocker in
+                   save_audio_decision(a, "updated-a")["remaining"])
+        assert scan["audio_decision_blockers"](
+            incremental_report_path, incremental_decisions,
+            incremental_source, video)
+        assert save_audio_decision(b, "updated-b")["remaining"] == []
+        a["issue"], a["status"] = None, "complete"
+        incremental_report["issues"] = [b]
+        incremental_report_path.write_text(json.dumps(incremental_report),
+                                           encoding="utf-8")
+        save_audio_decision(b, "after-a-disappeared")
+        saved_decisions = json.loads(incremental_decisions.read_text())
+        assert len(saved_decisions["decisions"]) == 1
+        assert any(item["reason"] == "question_disappeared"
+                   for item in saved_decisions["history"])
+        assert scan["audio_decision_blockers"](
+            incremental_report_path, incremental_decisions,
+            incremental_source, video) == []
         episode_summary = run(
             "episode-check", case, target,
             "--source-language", "tr", "--target-language", "en",

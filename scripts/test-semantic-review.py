@@ -62,6 +62,46 @@ def decision(path, source_id, disposition, evidence, prior=None):
 
 
 class SemanticReviewTests(unittest.TestCase):
+    def test_authored_fingerprint_rejects_changed_english_and_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, target = root / "tr.srt", root / "en.srt"
+            srt(source, ["Geldi.", "Burada.", "Bekle."])
+            srt(target, ["He came.", "Here.", "Wait."])
+            first_map = root / "first-map.json"
+            first = SEMANTIC["prepare"](source, target, first_map)
+            group = next(SEMANTIC["groups"](first, 2))
+            old_input = SEMANTIC["review_input"](*group[1:], [])
+            authored = root / "authored.json"
+            SEMANTIC["save_json"](authored, {
+                "batch_number": 1, "reviewer": "Codex agent test",
+                "review_input_sha256": SEMANTIC["fingerprint"](old_input),
+                "correct_ids": [item["id"] for item in group[1]],
+                "findings": [],
+            })
+            reviews = root / "reviews"
+            SEMANTIC["record_agent_review"](first_map, reviews, authored, 2)
+
+            srt(target, ["He did not come.", "Here.", "Wait."])
+            changed_english = root / "changed-english.json"
+            second = SEMANTIC["prepare"](source, target, changed_english, first_map)
+            self.assertEqual([item["id"] for item in first["utterances"]],
+                             [item["id"] for item in second["utterances"]])
+            with self.assertRaisesRegex(ValueError, "fingerprint"):
+                SEMANTIC["record_agent_review"](
+                    changed_english, reviews, authored, 2)
+
+            srt(target, ["He came.", "Here.", "Wait."])
+            srt(source, ["Geldi.", "Burada.", "Dur."])
+            changed_context = root / "changed-context.json"
+            third = SEMANTIC["prepare"](
+                source, target, changed_context, first_map)
+            self.assertEqual([item["id"] for item in first["utterances"][:2]],
+                             [item["id"] for item in third["utterances"][:2]])
+            with self.assertRaisesRegex(ValueError, "fingerprint"):
+                SEMANTIC["record_agent_review"](
+                    changed_context, reviews, authored, 2)
+
     def test_agent_review_requires_explicit_current_judgments(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -75,6 +115,9 @@ class SemanticReviewTests(unittest.TestCase):
             authored = root / "agent-input.json"
             SEMANTIC["save_json"](authored, {
                 "batch_number": 1, "reviewer": "Codex agent test",
+                "review_input_sha256": SEMANTIC["fingerprint"](
+                    SEMANTIC["review_input"](*next(SEMANTIC["groups"](manifest, 12))[1:], [])
+                ),
                 "correct_ids": [second],
                 "findings": [{"source_id": first, "verdict": "material_error",
                               "reason": "Turkish is affirmative; English adds negation."}],
@@ -88,6 +131,10 @@ class SemanticReviewTests(unittest.TestCase):
             self.assertTrue(SEMANTIC["blockers"](current, reviews, "agent", 12))
             SEMANTIC["save_json"](authored, {
                 "batch_number": 1, "reviewer": "Codex agent test",
+                "review_input_sha256": SEMANTIC["fingerprint"](
+                    SEMANTIC["review_input"](*next(SEMANTIC["groups"](
+                        json.loads(current.read_text()), 12))[1:], [])
+                ),
                 "correct_ids": [first, second], "findings": [],
             })
             SEMANTIC["record_agent_review"](current, reviews, authored, 12)
@@ -104,10 +151,13 @@ class SemanticReviewTests(unittest.TestCase):
             mapping = root / "map.json"
             manifest = SEMANTIC["prepare"](source, target, mapping)
             reviews = root / "reviews"
-            for number, selected, _, _ in SEMANTIC["groups"](manifest, 12):
+            for number, selected, relevant, context in SEMANTIC["groups"](manifest, 12):
                 authored = root / f"agent-{number}.json"
                 SEMANTIC["save_json"](authored, {
                     "batch_number": number, "reviewer": "Codex agent test",
+                    "review_input_sha256": SEMANTIC["fingerprint"](
+                        SEMANTIC["review_input"](selected, relevant, context, [])
+                    ),
                     "correct_ids": [item["id"] for item in selected],
                     "findings": [],
                 })

@@ -428,6 +428,9 @@ def record_agent_review(manifest_path, directory, authored_path, size,
     _, selected, relevant, context = group
     glossary = json.loads(glossary_path.read_text()) if glossary_path else []
     inputs = review_input(selected, relevant, context, glossary)
+    input_sha256 = fingerprint(inputs)
+    if authored.get("review_input_sha256") != input_sha256:
+        raise ValueError("Agent review input fingerprint is missing or stale")
     reviewer = authored.get("reviewer")
     if not isinstance(reviewer, str) or not reviewer.strip():
         raise ValueError("Agent review needs an identified reviewer")
@@ -443,7 +446,7 @@ def record_agent_review(manifest_path, directory, authored_path, size,
     save_json(path, {"status": "complete", "reviewer": reviewer,
                      "reviewed_at": datetime.now(timezone.utc).isoformat(),
                      "batch_number": number, "input": inputs,
-                     "input_sha256": fingerprint(inputs),
+                     "input_sha256": input_sha256,
                      "authored_path": str(authored_path.resolve()),
                      "authored_sha256": digest(authored_path),
                      "assessments": assessments})
@@ -554,6 +557,7 @@ def current_agent_batch(path, number, inputs, selected):
         if (saved.get("status") != "complete"
                 or saved.get("batch_number") != number
                 or authored.get("batch_number") != number
+                or authored.get("review_input_sha256") != fingerprint(inputs)
                 or saved.get("reviewer") != authored.get("reviewer")
                 or not isinstance(saved.get("reviewer"), str)
                 or not saved["reviewer"].strip()
@@ -730,6 +734,11 @@ def main():
     reviewing.add_argument("--batch-size", type=int, default=12)
     reviewing.add_argument("--glossary", type=Path)
     reviewing.add_argument("--agent-input", type=Path, required=True)
+    showing = commands.add_parser("review-input", help="show one current batch for agent review")
+    showing.add_argument("manifest", type=Path)
+    showing.add_argument("batch_number", type=int)
+    showing.add_argument("--batch-size", type=int, default=12)
+    showing.add_argument("--glossary", type=Path)
     checking = commands.add_parser("check")
     checking.add_argument("manifest", type=Path)
     checking.add_argument("reviews", type=Path)
@@ -755,6 +764,18 @@ def main():
         path = record_agent_review(args.manifest, args.output, args.agent_input,
                                    args.batch_size, args.glossary)
         print(json.dumps({"agent_review": str(path)}))
+    elif args.action == "review-input":
+        manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+        validate(manifest, Path(manifest["source"]), Path(manifest["target"]))
+        group = next((item for item in groups(manifest, args.batch_size)
+                      if item[0] == args.batch_number), None)
+        if group is None:
+            raise ValueError("Agent review names an unknown batch")
+        glossary = json.loads(args.glossary.read_text(encoding="utf-8")) if args.glossary else []
+        inputs = review_input(*group[1:], glossary)
+        print(json.dumps({"batch_number": args.batch_number,
+                          "review_input_sha256": fingerprint(inputs),
+                          "input": inputs}, ensure_ascii=False))
     elif args.action == "recover":
         print(json.dumps({"recovered": recover_saved(args.batch)}))
     elif args.action == "adjudicate":
