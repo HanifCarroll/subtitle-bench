@@ -105,19 +105,25 @@ def review_clip(client, clip, result_path, plan, window):
 
 INDEPENDENT_PROMPT = (
     "Listen to this original Turkish audio before seeing any subtitle wording. "
-    "Return JSON with utterances (approximate clip-relative start/end seconds, "
-    "spoken Turkish, speaker if distinguishable, confidence), short replies, "
-    "vocalizations, and uncertain spans. Include speech under music. "
-    "Do not infer unclear words. Do not treat your timestamps as final alignment."
+    "Return JSON with an acoustic assessment for each distinct interval: "
+    "relevant_speech, unintelligible_speech, music_without_relevant_words, "
+    "nonverbal_sound, or silence. Mixed intervals may have more than one category. "
+    "Give approximate clip-relative times, what you actually hear, and uncertainty. "
+    "For recoverable speech, include spoken Turkish, short replies, and speakers "
+    "where distinguishable. Check quiet speech and speech under music. "
+    "Do not invent words or treat your timestamps as final alignment."
 )
 COMPARISON_PROMPT = (
     "Listen to the same original audio again. Compare it with the independent "
     "observation and the supplied Turkish, English, reference, and ASR candidates. "
-    "Return JSON with supported corrections, omitted utterances, unsupported "
-    "subtitle text, meaning-changing differences, and unresolved ambiguities. "
+    "Return JSON with the supported acoustic outcome for each disputed interval, "
+    "supported corrections, omitted utterances, unsupported subtitle text, "
+    "meaning-changing differences, and unresolved ambiguities. Explain any "
+    "no-relevant-speech conclusion from the audio, including quiet-speech checks. "
     "For each finding include approximate clip-relative interval, source expression, "
     "current wording, proposed repair, evidence explanation, and uncertainty. "
-    "The original audio is authoritative; a reference or ASR agreement is not proof."
+    "The original audio is authoritative; empty ASR, absent VAD, and model agreement "
+    "are not proof."
 )
 
 
@@ -164,7 +170,8 @@ def two_stage_plan(plan):
                      or not 1 <= plan["max_output_tokens"] <= 8192))
             or type(plan.get("max_audio_seconds")) not in (int, float)
             or not 0 < plan["max_audio_seconds"] <= 90
-            or plan.get("max_calls") != 6
+            or type(plan.get("max_calls")) is not int
+            or plan["max_calls"] not in (2, 4, 6)
             or not isinstance(plan.get("bundles"), list)
             or not 1 <= len(plan["bundles"]) <= 3):
         raise ValueError("Use a bounded two-stage Gemini plan")
@@ -198,6 +205,8 @@ def two_stage_plan(plan):
 
     if total_ms > round(plan["max_audio_seconds"] * 1000):
         raise ValueError("Gemini plan exceeds its approved audio duration")
+    if len(selected) * 2 > plan["max_calls"]:
+        raise ValueError("Gemini plan exceeds its approved call count")
 
     return selected, total_ms
 
@@ -224,7 +233,7 @@ def two_stage_review(client, plan_path, plan, selected):
             "target_sha256": bundle["target_sha256"],
             "start_ms": bundle["start_ms"], "end_ms": bundle["end_ms"],
             "clip_sha256": file_hash(audio), "status": "uploading",
-            "prompt_version": "two-stage-audio-v1",
+            "prompt_version": "two-stage-audio-v2",
             "settings": {"generation_config": (
                 {"max_output_tokens": plan["max_output_tokens"]}
                 if "max_output_tokens" in plan else "provider_default")},

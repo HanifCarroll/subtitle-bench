@@ -248,13 +248,35 @@ def audio_entry_blockers(entry, issue, source_cues, source_sha256, video_sha256,
         if (entry.get("issue_sha256") != SEMANTIC["fingerprint"](issue)
                 or entry.get("source_interval_sha256") != interval_hash):
             return [f"Audio decision {start}-{end} is stale"]
-    if (entry.get("disposition") not in ("source_supported", "model_artifact", "repaired")
+    outcome = entry.get("audible_outcome")
+    if (outcome is not None and outcome not in
+            ("relevant_speech", "unintelligible_speech",
+             "music_without_relevant_words", "nonverbal_sound", "silence")):
+        return [f"Audio decision {start}-{end} has an invalid audible outcome"]
+    if (entry.get("disposition") not in
+            ("source_supported", "model_artifact", "repaired", "no_relevant_speech")
             or not isinstance(entry.get("reason"), str) or not entry["reason"].strip()
             or not isinstance(entry.get("reviewer"), str) or not entry["reviewer"].strip()
             or not isinstance(entry.get("evidence"), list) or not entry["evidence"]
             or any(not isinstance(path, str) or not (decisions_directory / path).is_file()
                    for path in entry["evidence"])):
         return [f"Audio decision {start}-{end} is incomplete or has invalid evidence"]
+    if entry["disposition"] == "no_relevant_speech":
+        if outcome not in ("music_without_relevant_words", "nonverbal_sound", "silence"):
+            return [f"Audio decision {start}-{end} needs a specific non-speech outcome"]
+        if any(cue["start"] < end and cue["end"] > start
+               and not SOURCE_REVIEW["is_non_speech_label"](cue["text"])
+               for cue in source_cues):
+            return [f"Audio decision {start}-{end} still overlaps a spoken-text cue"]
+        try:
+            result = json.loads((decisions_directory / entry["review_result"]).read_text(
+                encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return [f"Audio decision {start}-{end} needs audio-capable review"]
+        if not isinstance(result, dict):
+            return [f"Audio decision {start}-{end} needs audio-capable review"]
+        if result.get("route") == "local_asr_agent":
+            return [f"Audio decision {start}-{end} cannot infer no speech from local ASR"]
     interval_hash = SOURCE_REVIEW["source_interval_sha256"](
         source_cues, start, end
     )
@@ -934,14 +956,16 @@ def bundle(args):
 
     case_directory = args.case.resolve(strict=True)
     case, source = SOURCE_REVIEW["load_case"](case_directory)
-    target = args.target.resolve(strict=True)
+    target = None if str(args.target) == "-" else args.target.resolve(strict=True)
     if file_hash(Path(case["video"])) != case["video_sha256"]:
         raise ValueError("Video differs from the review case")
     if source == target or not 0 <= args.start_ms < args.end_ms <= case["duration_ms"]:
         raise ValueError("Choose separate tracks and a valid video-relative interval")
     output = args.output or case_directory / "bundles" / f"{args.start_ms}-{args.end_ms}.json"
-    protected = {source, target, Path(case["video"]).resolve(),
+    protected = {source, Path(case["video"]).resolve(),
                  case_directory / "case.json", case_directory / "review-queue.json"}
+    if target is not None:
+        protected.add(target)
     protected.update(path.resolve() for path in args.asr_manifest)
     if args.visual_notes:
         protected.add(args.visual_notes.resolve())
@@ -976,7 +1000,10 @@ def bundle(args):
     # 2. Put Turkish, English, reference, and saved ASR on the video clock.
 
     timeline = []
-    for kind, path in (("turkish", source), ("english", target)):
+    tracks = [("turkish", source)]
+    if target is not None:
+        tracks.append(("english", target))
+    for kind, path in tracks:
         for cue in read_cues(path):
             if cue["start"] < timeline_end and cue["end"] > timeline_start:
                 timeline.append({"kind": kind, "start_ms": cue["start"],
@@ -1077,7 +1104,8 @@ def bundle(args):
     report = {
         "case": str(case_directory), "start_ms": args.start_ms, "end_ms": args.end_ms,
         "video_sha256": case["video_sha256"], "source_sha256": file_hash(source),
-        "target_sha256": file_hash(target), "reference_alignment": case["reference_alignment"],
+        "target_sha256": file_hash(target) if target is not None else None,
+        "reference_alignment": case["reference_alignment"],
         "clips": clips, "issues": sorted(issues.values(), key=lambda item: item["start_ms"]),
         "recorded_decisions": list(decisions.values()),
         "asr_inputs": asr_inputs, "timeline": timeline,
@@ -1820,7 +1848,8 @@ def main():
 
     bundling = commands.add_parser("bundle", help="gather interval clips and subtitle evidence")
     bundling.add_argument("case", type=Path)
-    bundling.add_argument("target", type=Path)
+    bundling.add_argument("target", type=Path,
+                          help="English SRT, or '-' while English is pending")
     bundling.add_argument("start_ms", type=int)
     bundling.add_argument("end_ms", type=int)
     bundling.add_argument("--context", type=float, default=2)

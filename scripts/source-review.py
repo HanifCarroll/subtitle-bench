@@ -854,6 +854,13 @@ def record_decision(directory, decision_path):
         raise ValueError("Decision needs an issue_id and a valid review status")
     if not isinstance(decision.get("reason"), str) or not decision["reason"].strip():
         raise ValueError("Decision needs a reason")
+    audible_outcome = decision.get("audible_outcome")
+    if (audible_outcome is not None and audible_outcome not in
+            ("relevant_speech", "unintelligible_speech",
+             "music_without_relevant_words", "nonverbal_sound", "silence")):
+        raise ValueError("Decision has an invalid audible outcome")
+    if audible_outcome == "unintelligible_speech" and decision["status"] != "unresolved":
+        raise ValueError("Unintelligible speech must remain unresolved")
     evidence = decision.get("evidence")
     if (
         not isinstance(evidence, list)
@@ -904,6 +911,12 @@ def record_decision(directory, decision_path):
         ))
         if blockers:
             raise ValueError("; ".join(blockers))
+        if audible_outcome in ("silence", "nonverbal_sound",
+                               "music_without_relevant_words"):
+            review_path = directory / decision["review_result"]
+            review_result = json.loads(review_path.read_text(encoding="utf-8"))
+            if review_result.get("route") == "local_asr_agent":
+                raise ValueError("Local ASR alone cannot establish no relevant speech")
 
     if decision["status"] == "resolved":
 

@@ -219,6 +219,39 @@ def main():
         checked_audio = episode_output / "audio-check.json"
         audio_decisions = episode_output / "audio-decisions.json"
         audio_bundle = run("bundle", case, target, 0, 12_000)["bundle"]
+        # A synthetic audio-capable receipt can represent confirmed silence
+        # even when the recognizer returned no words. Local ASR alone cannot.
+        workbench = runpy.run_path(str(TOOL))
+        empty_issue = {"start_ms": 10_000, "end_ms": 12_000,
+                       "issue": "empty_asr_output", "status": "empty"}
+        no_speech = {
+            "start_ms": 10_000, "end_ms": 12_000,
+            "disposition": "no_relevant_speech", "audible_outcome": "silence",
+            "reason": "Synthetic audio-capable silence fixture",
+            "reviewer": "synthetic self-check", "evidence": [audio_bundle],
+            "review_result": synthetic_audio_review(
+                root, video, case / "working.tr.srt", 10_000, 12_000, "silence"
+            ),
+        }
+        assert workbench["audio_entry_blockers"](
+            no_speech, empty_issue, workbench["read_cues"](case / "working.tr.srt"),
+            digest(case / "working.tr.srt"), digest(video), episode_output, False
+        ) == []
+        still_captioned = {**no_speech, "start_ms": 0}
+        assert "still overlaps a spoken-text cue" in " ".join(
+            workbench["audio_entry_blockers"](
+                still_captioned, {**empty_issue, "start_ms": 0},
+                workbench["read_cues"](case / "working.tr.srt"),
+                digest(case / "working.tr.srt"), digest(video), episode_output, False
+            ))
+        local_only = root / "local-silence-review.json"
+        local_only.write_text(json.dumps({"route": "local_asr_agent"}),
+                              encoding="utf-8")
+        no_speech["review_result"] = str(local_only)
+        assert "cannot infer no speech" in " ".join(workbench["audio_entry_blockers"](
+            no_speech, empty_issue, workbench["read_cues"](case / "working.tr.srt"),
+            digest(case / "working.tr.srt"), digest(video), episode_output, False
+        ))
         audio_decisions.write_text(json.dumps({
             "audio_report_sha256": digest(checked_audio),
             "source_sha256": digest(case / "working.tr.srt"),
@@ -746,6 +779,13 @@ def main():
                    and item["granularity"] == "cue"
                    for item in bundle_report["timeline"])
         assert bundle_report["asr_inputs"][0]["source_stale"] is False
+
+        source_only = run("bundle", reference_case, "-", 1000, 10000,
+                          "--output", root / "source-only-bundle.json")
+        source_only_report = json.loads(Path(source_only["bundle"]).read_text())
+        assert source_only_report["target_sha256"] is None
+        assert "turkish" in {item["kind"] for item in source_only_report["timeline"]}
+        assert "english" not in {item["kind"] for item in source_only_report["timeline"]}
 
         visual_output = root / "visual-bundle.json"
         visual = run("bundle", reference_case, target, 1000, 10000,
