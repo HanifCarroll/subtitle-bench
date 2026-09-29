@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Map subtitle utterances and review English meaning against Turkish locally."""
+"""Map subtitle utterances and bind agent-reviewed English meaning to the tracks."""
 
 import argparse
 import hashlib
 import json
+import re
 import runpy
 import time
 import urllib.request
@@ -36,6 +37,11 @@ def previous_id(previous, kind, cue, used):
     """Keep one stable ID for an unchanged or one-to-one edited utterance."""
     candidates = [item for item in previous.get(kind, [])
                   if item["id"] not in used and len(item["cue_ids"]) == 1]
+    same_cue = [item for item in candidates
+                if item["cue_ids"] == [cue["id"]] and item["text"] == cue["text"]
+                and abs(item["start_ms"] - cue["start"]) <= 10_000]
+    if len(same_cue) == 1:
+        return same_cue[0]["id"]
     exact = [item for item in candidates
              if item["text"] == cue["text"]
              and abs(item["start_ms"] - cue["start"]) <= 1000]
@@ -137,6 +143,49 @@ def validate(manifest, source, target):
     if mapped_source != source_ids or mapped_target != target_ids:
         raise ValueError("Every display cue must link to an utterance or translation")
 
+    # A reviewed map may group or split display cues, but it must contain the
+    # exact words and punctuation that the linked SRT will deliver. Only
+    # whitespace may change across cue and line boundaries.
+    for name, items, cues in (("Turkish", units, source_cues),
+                              ("English", translations, target_cues)):
+        reviewed = " ".join(item["text"] for item in items).split()
+        delivered = " ".join(cue["text"] for cue in cues).split()
+        if reviewed != delivered:
+            raise ValueError(f"{name} utterance-map text differs from linked SRT")
+        positions = {cue["id"]: index for index, cue in enumerate(cues)}
+        prior = -1
+        for item in items:
+            indices = [positions[identifier] for identifier in item["cue_ids"]]
+            if indices != sorted(indices) or indices[0] < prior:
+                raise ValueError(f"{name} cue links are out of display order")
+            prior = indices[-1]
+        by_cue = {cue["id"]: [] for cue in cues}
+        for index, item in enumerate(items):
+            for cue_id in item["cue_ids"]:
+                by_cue[cue_id].append(index)
+        visited = set()
+        for start in range(len(items)):
+            if start in visited:
+                continue
+            pending = [start]
+            component_items = set()
+            component_cues = set()
+            while pending:
+                index = pending.pop()
+                if index in component_items:
+                    continue
+                component_items.add(index)
+                for cue_id in items[index]["cue_ids"]:
+                    component_cues.add(cue_id)
+                    pending.extend(by_cue[cue_id])
+            visited.update(component_items)
+            reviewed_group = " ".join(items[index]["text"]
+                                      for index in sorted(component_items)).split()
+            delivered_group = " ".join(cue["text"] for cue in cues
+                                       if cue["id"] in component_cues).split()
+            if reviewed_group != delivered_group:
+                raise ValueError(f"{name} cue-linked text differs from linked SRT")
+
 
 def groups(manifest, size):
     if not 1 <= size <= 20:
@@ -164,17 +213,33 @@ def review_input(selected, relevant, context, glossary):
 
 
 def normalize_assessments(raw_assessments, inputs):
-    """Expose omitted model fields as uncertainty instead of losing a batch."""
+    """Expose omitted model fields or units as uncertainty, keeping raw output."""
     if not isinstance(raw_assessments, list) or any(
         not isinstance(item, dict) for item in raw_assessments
     ):
         return None
     expected = {item["id"]: item["text"] for item in inputs["source"]}
     identifiers = [item.get("source_id") for item in raw_assessments]
-    if len(identifiers) != len(expected) or set(identifiers) != set(expected):
+    if (any(not isinstance(identifier, str) for identifier in identifiers)
+            or len(identifiers) != len(set(identifiers))
+            or not set(identifiers) <= set(expected)):
         return None
+    by_id = {item["source_id"]: item for item in raw_assessments}
     result = []
-    for item in raw_assessments:
+    for source_id in expected:
+        if source_id not in by_id:
+            related = [translation["text"] for translation in inputs["english"]
+                       if source_id in translation["source_ids"]]
+            result.append({"source_id": source_id, "verdict": "uncertain",
+                           "source_expression": expected[source_id],
+                           "affected_english": " / ".join(related),
+                           "error_type": "missing_assessment", "severity": "unknown",
+                           "intended_meaning": None,
+                           "explanation": "Reviewer omitted this source ID; agent review required",
+                           "proposed_repair": None, "audio_needed": None,
+                           "schema_uncertainty": "Model omitted assessment"})
+            continue
+        item = by_id[source_id]
         assessment = dict(item)
         if assessment.get("verdict") not in ("correct", "material_error", "uncertain"):
             assessment["verdict"] = "uncertain"
@@ -190,6 +255,37 @@ def normalize_assessments(raw_assessments, inputs):
                 assessment["verdict"] = "uncertain"
         result.append(assessment)
     return result
+
+
+def response_assessments(response):
+    """Keep complete objects from a token-truncated JSON response as evidence."""
+    content = response["message"]["content"]
+    try:
+        return json.loads(content)["assessments"]
+    except json.JSONDecodeError:
+        if response.get("done_reason") != "length":
+            raise
+    prefix = re.match(r'\s*\{\s*"assessments"\s*:\s*\[', content)
+    if not prefix:
+        raise ValueError("Truncated response has no assessments array")
+    decoder = json.JSONDecoder()
+    position = prefix.end()
+    complete = []
+    while position < len(content):
+        while position < len(content) and content[position] in " \n\r\t,":
+            position += 1
+        if position == len(content) or content[position] == "]":
+            break
+        try:
+            item, position = decoder.raw_decode(content, position)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(item, dict):
+            raise ValueError("Truncated assessment is malformed")
+        complete.append(item)
+    if not complete:
+        raise ValueError("Truncated response has no complete assessment")
+    return complete
 
 
 PROMPT = (
@@ -210,8 +306,8 @@ PROMPT = (
 
 
 def review(manifest_path, output, model, size, glossary_path=None, limit=None,
-           retry_invalid=False):
-    """Run resumable source-referenced review with a local Ollama model."""
+           retry_invalid=False, batch_numbers=None):
+    """Legacy saved-review runner; agent-authored reviews are the release source."""
 
     # 1. Bind each batch to the current dialogue and optional sourced glossary.
 
@@ -227,6 +323,8 @@ def review(manifest_path, output, model, size, glossary_path=None, limit=None,
     completed = 0
     new_calls = 0
     for number, selected, relevant, context in groups(manifest, size):
+        if batch_numbers is not None and number not in batch_numbers:
+            continue
         inputs = review_input(selected, relevant, context, glossary)
         identity = fingerprint({"model": model, "prompt": PROMPT, "input": inputs})
         path = output / f"batch-{number:04d}.json"
@@ -251,7 +349,7 @@ def review(manifest_path, output, model, size, glossary_path=None, limit=None,
             data=json.dumps({"model": model, "messages": [{"role": "user",
                        "content": PROMPT + json.dumps(inputs, ensure_ascii=False)}],
                        "format": "json", "stream": False, "think": False,
-                       "options": {"temperature": 0, "num_predict": 1200,
+                       "options": {"temperature": 0, "num_predict": 2400,
                                    "num_ctx": 8192}}).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -259,8 +357,7 @@ def review(manifest_path, output, model, size, glossary_path=None, limit=None,
         with urllib.request.urlopen(request, timeout=900) as response:
             raw = json.load(response)
         try:
-            parsed = json.loads(raw["message"]["content"])
-            assessments = normalize_assessments(parsed.get("assessments"), inputs)
+            assessments = normalize_assessments(response_assessments(raw), inputs)
         except (AttributeError, KeyError, TypeError, ValueError):
             assessments = None
         expected = {item["id"] for item in selected}
@@ -290,17 +387,80 @@ def review(manifest_path, output, model, size, glossary_path=None, limit=None,
     return completed
 
 
+def agent_assessments(authored, selected):
+    """Require an explicit judgment for each current source ID."""
+    correct_ids = authored.get("correct_ids")
+    findings = authored.get("findings")
+    if (not isinstance(correct_ids, list) or not isinstance(findings, list)
+            or any(not isinstance(item, str) for item in correct_ids)
+            or any(not isinstance(item, dict) for item in findings)):
+        raise ValueError("Agent review needs explicit correct IDs and findings")
+    expected = [item["id"] for item in selected]
+    finding_ids = [item.get("source_id") for item in findings]
+    if (len(correct_ids + finding_ids) != len(expected)
+            or len(set(correct_ids + finding_ids)) != len(expected)
+            or set(correct_ids + finding_ids) != set(expected)):
+        raise ValueError("Agent review must assess every source ID exactly once")
+    for finding in findings:
+        if (finding.get("verdict") not in ("material_error", "uncertain")
+                or not isinstance(finding.get("reason"), str)
+                or not finding["reason"].strip()):
+            raise ValueError("Agent finding needs a verdict and specific reason")
+    by_id = {item["source_id"]: item for item in findings}
+    return [by_id.get(identifier, {"source_id": identifier,
+                                   "verdict": "correct"})
+            for identifier in expected]
+
+
+def record_agent_review(manifest_path, directory, authored_path, size,
+                        glossary_path=None):
+    """Record explicit agent judgments for every source unit in one current batch."""
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    validate(manifest, Path(manifest["source"]), Path(manifest["target"]))
+    authored = json.loads(authored_path.read_text(encoding="utf-8"))
+    number = authored.get("batch_number")
+    if type(number) is not int or number < 1:
+        raise ValueError("Agent review needs a batch number")
+    group = next((values for values in groups(manifest, size)
+                  if values[0] == number), None)
+    if group is None:
+        raise ValueError("Agent review names an unknown batch")
+    _, selected, relevant, context = group
+    glossary = json.loads(glossary_path.read_text()) if glossary_path else []
+    inputs = review_input(selected, relevant, context, glossary)
+    reviewer = authored.get("reviewer")
+    if not isinstance(reviewer, str) or not reviewer.strip():
+        raise ValueError("Agent review needs an identified reviewer")
+    assessments = agent_assessments(authored, selected)
+    path = directory / f"agent-batch-{number:04d}.json"
+    if authored_path.resolve() == path.resolve():
+        raise ValueError("Keep authored judgments separate from the review receipt")
+    if path.exists():
+        old = json.loads(path.read_text(encoding="utf-8"))
+        archive = directory / (f"agent-batch-{number:04d}.prior-"
+                               f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')}.json")
+        save_json(archive, old)
+    save_json(path, {"status": "complete", "reviewer": reviewer,
+                     "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                     "batch_number": number, "input": inputs,
+                     "input_sha256": fingerprint(inputs),
+                     "authored_path": str(authored_path.resolve()),
+                     "authored_sha256": digest(authored_path),
+                     "assessments": assessments})
+    return path
+
+
 def recover_saved(path):
-    """Normalize a saved structured response without repeating a model call."""
+    """Expose omissions in a saved response without repeating a model call."""
     saved = json.loads(path.read_text(encoding="utf-8"))
     if (not isinstance(saved.get("response"), dict)
             or fingerprint(saved["response"]) != saved.get("response_sha256")):
         raise ValueError("Saved semantic response is missing or stale")
     try:
-        parsed = json.loads(saved["response"]["message"]["content"])
-        assessments = normalize_assessments(parsed.get("assessments"), saved["input"])
+        assessments = normalize_assessments(response_assessments(saved["response"]),
+                                            saved["input"])
     except (AttributeError, KeyError, TypeError, ValueError) as error:
-        raise ValueError("Saved response is not complete structured JSON") from error
+        raise ValueError("Saved response has no usable structured assessments") from error
     if assessments is None:
         raise ValueError("Saved response omits source IDs")
     saved["assessments"] = assessments
@@ -310,6 +470,160 @@ def recover_saved(path):
     saved["status"] = "complete"
     save_json(path, saved)
     return len(assessments)
+
+
+def current_finding(manifest, review_directory, model, size, glossary, source_id):
+    """Find a valid raw assessment for one current source utterance."""
+    for number, selected, relevant, context in groups(manifest, size):
+        if source_id not in {item["id"] for item in selected}:
+            continue
+        inputs = review_input(selected, relevant, context, glossary)
+        identity = fingerprint({"model": model, "prompt": PROMPT, "input": inputs})
+        path = review_directory / f"batch-{number:04d}.json"
+        if not path.is_file():
+            raise ValueError(f"Current semantic batch is missing: {path}")
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        if (saved.get("status") != "complete" or saved.get("model") != model
+                or saved.get("prompt_version") != "semantic-v1"
+                or saved.get("input_sha256") != identity
+                or saved.get("input") != inputs
+                or saved.get("response_sha256") != fingerprint(saved.get("response"))):
+            raise ValueError(f"Current semantic batch is stale: {path}")
+        try:
+            raw = response_assessments(saved["response"])
+            normalized = normalize_assessments(raw, inputs)
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"Current semantic batch is malformed: {path}") from error
+        if normalized != saved.get("assessments"):
+            raise ValueError(f"Current semantic batch was altered: {path}")
+        assessment = next(item for item in normalized
+                          if item["source_id"] == source_id)
+        return path, saved, inputs, assessment
+    raise ValueError(f"Unknown source utterance: {source_id}")
+
+
+def adjudication_path(review_directory, source_id):
+    return review_directory / "adjudications" / (fingerprint(source_id) + ".json")
+
+
+def evidence_is_current(evidence, question_type):
+    if not isinstance(evidence, list) or not evidence:
+        return False
+    if question_type == "source_recognition" and not any(
+            item.get("kind") == "original_audio" for item in evidence
+            if isinstance(item, dict)):
+        return False
+    return all(isinstance(item, dict)
+               and item.get("kind") in ("source_text", "scene_context",
+                                        "original_audio", "model_receipt", "other")
+               and isinstance(item.get("path"), str)
+               and Path(item["path"]).is_file()
+               and item.get("sha256") == digest(Path(item["path"]))
+               for item in evidence)
+
+
+def current_adjudication(record, saved, inputs, assessment):
+    """A disposition expires with the finding, context, or cited evidence."""
+    return (isinstance(record, dict)
+            and record.get("source_id") == assessment["source_id"]
+            and record.get("input_sha256") == saved["input_sha256"]
+            and record.get("response_sha256") == saved["response_sha256"]
+            and record.get("finding_sha256") == fingerprint(assessment)
+            and record.get("review_context") == inputs
+            and record.get("finding") == assessment
+            and record.get("disposition") == "supported_as_written"
+            and record.get("question_type") in
+            ("translation_semantics", "source_recognition")
+            and isinstance(record.get("reviewer"), str)
+            and bool(record["reviewer"].strip())
+            and isinstance(record.get("reason"), str)
+            and bool(record["reason"].strip())
+            and evidence_is_current(record.get("evidence"),
+                                    record["question_type"]))
+
+
+def current_agent_batch(path, number, inputs, selected):
+    """Verify the agent's explicit judgments and their authored source file."""
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        authored_path = Path(saved.get("authored_path", ""))
+        if (not authored_path.is_file()
+                or saved.get("authored_sha256") != digest(authored_path)):
+            return None
+        authored = json.loads(authored_path.read_text(encoding="utf-8"))
+        if (saved.get("status") != "complete"
+                or saved.get("batch_number") != number
+                or authored.get("batch_number") != number
+                or saved.get("reviewer") != authored.get("reviewer")
+                or not isinstance(saved.get("reviewer"), str)
+                or not saved["reviewer"].strip()
+                or saved.get("input") != inputs
+                or saved.get("input_sha256") != fingerprint(inputs)
+                or saved.get("assessments") != agent_assessments(authored, selected)):
+            return None
+        return saved["assessments"]
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def adjudicate(manifest_path, review_directory, decision_path, model, size,
+               glossary_path=None):
+    """Record an agent decision beside the untouched model response."""
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    validate(manifest, Path(manifest["source"]), Path(manifest["target"]))
+    glossary = json.loads(glossary_path.read_text()) if glossary_path else []
+    decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    source_id = decision.get("source_id")
+    path, saved, inputs, assessment = current_finding(
+        manifest, review_directory, model, size, glossary, source_id
+    )
+    disposition = decision.get("disposition")
+    if disposition not in ("supported_as_written", "repaired_rechecked", "unresolved"):
+        raise ValueError("Unknown semantic disposition")
+    if (decision.get("question_type") not in
+            ("translation_semantics", "source_recognition")
+            or not isinstance(decision.get("reviewer"), str)
+            or not decision["reviewer"].strip()
+            or not isinstance(decision.get("reason"), str)
+            or not decision["reason"].strip()
+            or not evidence_is_current(decision.get("evidence"),
+                                       decision["question_type"])):
+        raise ValueError("Semantic decision needs a reviewer, reason, and current evidence")
+    if disposition == "repaired_rechecked":
+        if assessment["verdict"] != "correct":
+            raise ValueError("A repaired translation needs a current correct recheck")
+        prior_path = Path(decision.get("prior_review", ""))
+        if not prior_path.is_file() or prior_path.resolve() == path.resolve():
+            raise ValueError("Repair needs the saved earlier finding")
+        prior = json.loads(prior_path.read_text(encoding="utf-8"))
+        if (prior.get("response_sha256") != fingerprint(prior.get("response"))
+                or prior.get("status") != "complete"):
+            raise ValueError("Earlier finding is not intact")
+        prior_assessment = next((item for item in prior.get("assessments", [])
+                                 if item.get("source_id") == source_id), None)
+        if (not prior_assessment or prior_assessment.get("verdict") not in
+                ("material_error", "uncertain")
+                or prior.get("input") == inputs):
+            raise ValueError("Repair needs a changed, previously flagged input")
+        prior_binding = {"path": str(prior_path.resolve()),
+                         "sha256": digest(prior_path),
+                         "finding": prior_assessment}
+    elif assessment["verdict"] == "correct":
+        raise ValueError("A current correct assessment needs no false-alarm decision")
+    else:
+        prior_binding = None
+    record = {"version": 1, "source_id": source_id,
+              "disposition": disposition, "question_type": decision["question_type"],
+              "reviewer": decision["reviewer"], "reason": decision["reason"],
+              "evidence": decision["evidence"], "batch": str(path.resolve()),
+              "input_sha256": saved["input_sha256"],
+              "response_sha256": saved["response_sha256"],
+              "finding_sha256": fingerprint(assessment),
+              "review_context": inputs, "finding": assessment,
+              "prior_finding": prior_binding}
+    output = adjudication_path(review_directory, source_id)
+    save_json(output, record)
+    return output
 
 
 def blockers(manifest_path, review_directory, model, size, glossary_path=None):
@@ -332,12 +646,23 @@ def blockers(manifest_path, review_directory, model, size, glossary_path=None):
     material = 0
     uncertain = 0
     for number, selected, relevant, context in groups(manifest, size):
+        inputs = review_input(selected, relevant, context, glossary)
+        if model == "agent":
+            path = review_directory / f"agent-batch-{number:04d}.json"
+            assessments = current_agent_batch(path, number, inputs, selected)
+            if assessments is None:
+                pending += len(selected)
+                continue
+            material += sum(item["verdict"] == "material_error"
+                            for item in assessments)
+            uncertain += sum(item["verdict"] == "uncertain"
+                             for item in assessments)
+            continue
         path = review_directory / f"batch-{number:04d}.json"
         if not path.is_file():
             pending += len(selected)
             continue
         saved = json.loads(path.read_text(encoding="utf-8"))
-        inputs = review_input(selected, relevant, context, glossary)
         identity = fingerprint({"model": model, "prompt": PROMPT,
                                 "input": inputs})
         if (saved.get("status") != "complete" or saved.get("input_sha256") != identity
@@ -350,8 +675,7 @@ def blockers(manifest_path, review_directory, model, size, glossary_path=None):
             continue
         assessments = saved.get("assessments", [])
         try:
-            raw_assessments = json.loads(saved["response"]["message"]["content"])[
-                "assessments"]
+            raw_assessments = response_assessments(saved["response"])
             normalized = normalize_assessments(raw_assessments, inputs)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             normalized = None
@@ -364,8 +688,19 @@ def blockers(manifest_path, review_directory, model, size, glossary_path=None):
                        for item in assessments)):
             pending += len(selected)
             continue
-        material += sum(item.get("verdict") == "material_error" for item in assessments)
-        uncertain += sum(item.get("verdict") == "uncertain" for item in assessments)
+        for assessment in assessments:
+            if assessment["verdict"] == "correct":
+                continue
+            decision_path = adjudication_path(review_directory,
+                                              assessment["source_id"])
+            if decision_path.is_file():
+                decision = json.loads(decision_path.read_text(encoding="utf-8"))
+                if current_adjudication(decision, saved, inputs, assessment):
+                    continue
+            if assessment["verdict"] == "material_error":
+                material += 1
+            else:
+                uncertain += 1
     failures = []
     if missing_links:
         failures.append(f"{len(missing_links)} source utterances lack English links")
@@ -376,7 +711,7 @@ def blockers(manifest_path, review_directory, model, size, glossary_path=None):
     if material:
         failures.append(f"{material} English meaning errors need repair and recheck")
     if uncertain:
-        failures.append(f"{uncertain} English meanings need adjudication")
+        failures.append(f"{uncertain} semantic review findings need adjudication")
     return failures
 
 
@@ -389,22 +724,27 @@ def main():
         command.add_argument("target", type=Path)
     prepared.add_argument("output", type=Path)
     prepared.add_argument("--previous", type=Path)
-    reviewing = commands.add_parser("review")
+    reviewing = commands.add_parser("review", help="record one agent-reviewed batch")
     reviewing.add_argument("manifest", type=Path)
     reviewing.add_argument("output", type=Path)
-    reviewing.add_argument("--model", default="qwen3.5:27b")
     reviewing.add_argument("--batch-size", type=int, default=12)
     reviewing.add_argument("--glossary", type=Path)
-    reviewing.add_argument("--limit", type=int)
-    reviewing.add_argument("--retry-invalid", action="store_true")
+    reviewing.add_argument("--agent-input", type=Path, required=True)
     checking = commands.add_parser("check")
     checking.add_argument("manifest", type=Path)
     checking.add_argument("reviews", type=Path)
-    checking.add_argument("--model", default="qwen3.5:27b")
+    checking.add_argument("--model", default="agent")
     checking.add_argument("--batch-size", type=int, default=12)
     checking.add_argument("--glossary", type=Path)
     recovering = commands.add_parser("recover")
     recovering.add_argument("batch", type=Path)
+    adjudicating = commands.add_parser("adjudicate")
+    adjudicating.add_argument("manifest", type=Path)
+    adjudicating.add_argument("reviews", type=Path)
+    adjudicating.add_argument("decision", type=Path)
+    adjudicating.add_argument("--model", default="qwen3.5:27b")
+    adjudicating.add_argument("--batch-size", type=int, default=12)
+    adjudicating.add_argument("--glossary", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
         result = prepare(args.source, args.target, args.output, args.previous)
@@ -412,11 +752,15 @@ def main():
                           "translations": len(result["translations"]),
                           "manifest": str(args.output)}))
     elif args.action == "review":
-        print(json.dumps({"completed_batches": review(
-            args.manifest, args.output, args.model, args.batch_size,
-            args.glossary, args.limit, args.retry_invalid)}))
+        path = record_agent_review(args.manifest, args.output, args.agent_input,
+                                   args.batch_size, args.glossary)
+        print(json.dumps({"agent_review": str(path)}))
     elif args.action == "recover":
         print(json.dumps({"recovered": recover_saved(args.batch)}))
+    elif args.action == "adjudicate":
+        path = adjudicate(args.manifest, args.reviews, args.decision,
+                          args.model, args.batch_size, args.glossary)
+        print(json.dumps({"adjudication": str(path)}))
     else:
         failures = blockers(args.manifest, args.reviews, args.model,
                             args.batch_size, args.glossary)

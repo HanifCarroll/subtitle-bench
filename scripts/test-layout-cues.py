@@ -38,6 +38,17 @@ class LayoutTests(unittest.TestCase):
                  "start_ms": 6000, "end_ms": 8000},
             ]
             mapping.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "differs from linked SRT"):
+                LAYOUT["render"](
+                    mapping, root / "rejected.tr.srt", root / "rejected.en.srt",
+                    root / "rejected.json")
+            source.write_text(
+                "1\n00:00:01,000 --> 00:00:05,000\nAyyy!\n\n"
+                "2\n00:00:06,000 --> 00:00:08,000\nBuradayım.\n", encoding="utf-8")
+            english.write_text(
+                "1\n00:00:01,000 --> 00:00:05,000\nAyyy!\n\n"
+                "2\n00:00:06,000 --> 00:00:08,000\nI'm here.\n", encoding="utf-8")
+            SEMANTIC["prepare"](source, english, mapping)
             report = LAYOUT["render"](
                 mapping, root / "draft.tr.srt", root / "draft.en.srt",
                 root / "layout.json")

@@ -8,7 +8,7 @@ These are the versions observed on the 2026-09-28 Mac pilot, rather than a claim
 | Python | 3.14.5 | Standard-library CLI and offline checks |
 | FFmpeg / ffprobe | `ffmpeg-full` 8.1.2 with libass | Clip extraction and actual frame rendering |
 | whisper.cpp | 1.9.1 | Existing baseline transcription |
-| Ollama | 0.32.5 | Local `qwen3.5:27b` and `qwen3.5:4b` semantic trials |
+| Ollama | 0.32.5 | Historical local semantic trials; not used for current text review |
 | `mlx-audio` | 0.5.6 | Local Qwen3 ASR episode windows |
 | Qwen3 ASR 1.7B 4-bit | `mlx-community/Qwen3-ASR-1.7B-4bit`, cached revision `78a389c776a5483b2d0d4ea5494e11012e0d6159` | Independent Turkish recognition |
 | WhisperX | 3.8.6 | Corrected Turkish word alignment |
@@ -31,6 +31,7 @@ python3 scripts/test-google-second-opinion.py
 python3 scripts/test-translate-subtitles.py
 python3 scripts/test-layout-cues.py
 python3 scripts/test-layout-audit.py
+python3 scripts/test-semantic-review.py
 python3 scripts/test-elevenlabs-scribe-trial.py
 ```
 

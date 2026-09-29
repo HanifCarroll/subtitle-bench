@@ -15,6 +15,7 @@ from unittest.mock import patch
 TOOL = Path(__file__).with_name("subtitle-workbench.py")
 SEMANTIC = runpy.run_path(str(Path(__file__).with_name("semantic-review.py")))
 ALIGNER = runpy.run_path(str(Path(__file__).with_name("align-turkish.py")))
+LAYOUT_AUDIT = runpy.run_path(str(Path(__file__).with_name("layout-audit.py")))
 PLAYBACK = runpy.run_path(str(Path(__file__).with_name("playback-check.py")))
 
 
@@ -74,6 +75,34 @@ def synthetic_semantic_review(source, target, root):
             "input": inputs, "assessments": assessments,
         }), encoding="utf-8")
     return manifest_path, reviews
+
+
+def synthetic_layout_render(video, manifest_path, case, root):
+    """Make current timing and real libass evidence for the release fixture."""
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    alignment_dir = root / "alignment"
+    alignment_dir.mkdir()
+    units = manifest["utterances"]
+    alignment = {
+        "video_sha256": digest(video), "model": "synthetic-aligner",
+        "audio_start_ms": 0, "audio_end_ms": 12_000,
+        "input_sha256": ALIGNER["alignment_input"](
+            units, 0, 12_000, digest(video), "synthetic-aligner"
+        ),
+        "utterances": [{"id": unit["id"], "text": unit["text"],
+                        "source_cue_ids": unit["cue_ids"], "status": "aligned",
+                        "word_timings": [{"text": "fixture", "start_ms": 1_000,
+                                          "end_ms": 10_000}]}
+                       for unit in units],
+    }
+    (alignment_dir / "000.json").write_text(json.dumps(alignment), encoding="utf-8")
+    layout_report = root / "layout-audit.json"
+    LAYOUT_AUDIT["run"](video, manifest_path, alignment_dir, layout_report, 700, 25)
+    render_report, _ = PLAYBACK["check"](
+        video, Path(manifest["source"]), Path(manifest["target"]),
+        root / "candidate-render", []
+    )
+    return layout_report, render_report
 
 
 def main():
@@ -195,6 +224,91 @@ def main():
                                root, video, case / "working.tr.srt", 0, 12_000,
                                "audio-question") }],
         }), encoding="utf-8")
+        scan = runpy.run_path(str(TOOL))
+        checked_data = json.loads(checked_audio.read_text())
+        assert scan["audio_scan_blockers"](checked_data, 12_000) == []
+        for status in (None, "unknown", "failed", "truncated"):
+            changed = json.loads(checked_audio.read_text())
+            if status is None:
+                changed["windows"][0].pop("status")
+            else:
+                changed["windows"][0]["status"] = status
+            changed["issues"] = list(changed["windows"])
+            assert scan["audio_scan_blockers"](changed, 12_000)
+        empty = json.loads(checked_audio.read_text())
+        empty["windows"][0].update({"status": "empty", "text": "",
+                                    "issue": "empty_asr_output"})
+        empty["issues"] = list(empty["windows"])
+        empty_path = root / "empty-audio-report.json"
+        empty_path.write_text(json.dumps(empty), encoding="utf-8")
+        assert scan["audio_scan_blockers"](empty, 12_000) == []
+        assert scan["audio_decision_blockers"](
+            empty_path, root / "missing-empty-decisions.json",
+            case / "working.tr.srt", video
+        )
+        for issue_kind, status in (("empty_asr_output", "empty"),
+                                   ("repeated_asr_output", "questionable")):
+            current = json.loads(checked_audio.read_text())
+            current["windows"][0]["status"] = status
+            current["windows"][0]["issue"] = issue_kind
+            if status == "empty":
+                current["windows"][0]["text"] = ""
+            current["issues"] = list(current["windows"])
+            report_path = root / f"{status}-report.json"
+            report_path.write_text(json.dumps(current), encoding="utf-8")
+            decision_data = json.loads(audio_decisions.read_text())
+            decision_data["audio_report_sha256"] = digest(report_path)
+            decision_path = root / f"{status}-decisions.json"
+            decision_path.write_text(json.dumps(decision_data), encoding="utf-8")
+            assert scan["audio_scan_blockers"](current, 12_000) == []
+            assert scan["audio_decision_blockers"](
+                report_path, decision_path, case / "working.tr.srt", video
+            ) == []
+        interval_source = root / "interval-source.tr.srt"
+        interval_source.write_text(
+            "1\n00:00:01,000 --> 00:00:05,000\nMerhaba.\n\n"
+            "2\n00:00:08,000 --> 00:00:10,000\nSonra.\n", encoding="utf-8")
+        first = dict(checked_data["windows"][0])
+        first["end_ms"] = 6_000
+        second = {**first, "start_ms": 6_000, "end_ms": 12_000,
+                  "text": "Sonra.", "source_text": "Sonra.", "issue": None,
+                  "status": "complete"}
+        local_report = {**checked_data, "source": str(interval_source),
+                        "source_sha256": digest(interval_source),
+                        "windows": [first, second], "issues": [first]}
+        local_report_path = root / "interval-audio-report.json"
+        local_report_path.write_text(json.dumps(local_report), encoding="utf-8")
+        local_decisions = root / "interval-audio-decisions.json"
+        local_entry = {
+            "start_ms": 0, "end_ms": 6_000,
+            "disposition": "model_artifact", "reason": "Synthetic local fixture",
+            "reviewer": "synthetic self-check", "evidence": [audio_bundle],
+            "review_result": synthetic_audio_review(
+                root, video, interval_source, 0, 6_000, "interval-audio"
+            ),
+        }
+        local_input = root / "interval-audio-input.json"
+        local_input.write_text(json.dumps(local_entry), encoding="utf-8")
+        assert run("audio-adjudicate", local_report_path,
+                   local_decisions, local_input)["remaining"] == []
+        assert scan["audio_decision_blockers"](
+            local_report_path, local_decisions, interval_source, video
+        ) == []
+        interval_source.write_text(interval_source.read_text().replace(
+            "Sonra.", "Daha sonra."), encoding="utf-8")
+        local_report["source_sha256"] = digest(interval_source)
+        local_report["windows"][1]["source_text"] = "Daha sonra."
+        local_report_path.write_text(json.dumps(local_report), encoding="utf-8")
+        assert scan["audio_decision_blockers"](
+            local_report_path, local_decisions, interval_source, video
+        ) == []
+        interval_source.write_text(interval_source.read_text().replace(
+            "Merhaba.", "Geldi."), encoding="utf-8")
+        local_report["source_sha256"] = digest(interval_source)
+        local_report_path.write_text(json.dumps(local_report), encoding="utf-8")
+        assert scan["audio_decision_blockers"](
+            local_report_path, local_decisions, interval_source, video
+        )
         episode_summary = run(
             "episode-check", case, target,
             "--source-language", "tr", "--target-language", "en",
@@ -254,11 +368,21 @@ def main():
         semantic_manifest, semantic_reviews = synthetic_semantic_review(
             case / "working.tr.srt", target, root
         )
+        layout_report, render_report = synthetic_layout_render(
+            video, semantic_manifest, case, root
+        )
         semantic_options = (
             "--semantic-manifest", semantic_manifest,
             "--semantic-reviews", semantic_reviews,
             "--semantic-model", "synthetic-test",
+            "--layout-report", layout_report,
+            "--render-report", render_report,
         )
+        scene = run("bundle", case, target, 0, 12_000,
+                    "--audio-report", checked_audio,
+                    "--layout-report", layout_report)["bundle"]
+        scene_issues = json.loads(Path(scene).read_text())["issues"]
+        assert any(item["id"].startswith("audio:") for item in scene_issues)
         episode_summary = run(
             "episode-check", case, target,
             "--source-language", "tr", "--target-language", "en",
@@ -296,8 +420,9 @@ def main():
         long_report = root / "long-target.json"
         run("translation-audit", source, long_target, "--output", long_report)
         assert "long_target_cue" in {
-            flag["kind"] for flag in json.loads(long_report.read_text())["flags"]
+            flag["kind"] for flag in json.loads(long_report.read_text())["presentation_flags"]
         }
+        assert not json.loads(long_report.read_text())["flags"]
         fast_target = root / "fast.en.srt"
         fast_target.write_text(
             "1\n00:00:01,000 --> 00:00:02,000\nThis sentence is far too fast.\n",
@@ -425,6 +550,8 @@ def main():
             audio_decisions=audio_decisions, output=root / "urgent-release.json",
             semantic_manifest=semantic_manifest, semantic_reviews=semantic_reviews,
             semantic_model="synthetic-test", semantic_batch_size=12, glossary=None,
+            layout_report=layout_report, timing_decisions=None,
+            render_report=render_report,
             apply=False, backup_dir=None,
         )
         with patch.dict(release_function.__globals__, {
@@ -496,6 +623,8 @@ def main():
             audio_decisions=audio_decisions, output=root / "failed-release.json",
             semantic_manifest=semantic_manifest, semantic_reviews=semantic_reviews,
             semantic_model="synthetic-test", semantic_batch_size=12, glossary=None,
+            layout_report=layout_report, timing_decisions=None,
+            render_report=render_report,
             apply=True, backup_dir=root / "failed-backup",
         )
         with patch("os.replace", side_effect=fail_second_replace):
@@ -549,6 +678,43 @@ def main():
                    and item["granularity"] == "cue"
                    for item in bundle_report["timeline"])
         assert bundle_report["asr_inputs"][0]["source_stale"] is False
+
+        visual_output = root / "visual-bundle.json"
+        visual = run("bundle", reference_case, target, 1000, 10000,
+                     "--visual-cue-id", 1, "--output", visual_output)
+        frames = json.loads(Path(visual["bundle"]).read_text())["visual_context"]
+        assert frames["status"] == "frames_only"
+        assert Path(frames["overview_frame"]["path"]).is_file()
+        assert {frame["position"] for frame in frames["cues"][0]["frames"]} == {
+            "before", "during", "after"
+        }
+        for frame in frames["cues"][0]["frames"]:
+            assert digest(Path(frame["path"])) == frame["sha256"]
+        observed_at = frames["cues"][0]["frames"][1]["timestamp_ms"]
+        visual_notes = root / "visual-notes.json"
+        visual_notes.write_text(json.dumps({
+            "reviewer": "synthetic visual reviewer",
+            "scene_overview": "Black synthetic test scene.",
+            "observations": [{"cue_id": 1, "timestamp_ms": observed_at,
+                              "category": "setting",
+                              "observation": "The sampled frame is black."}],
+        }), encoding="utf-8")
+        run("bundle", reference_case, target, 1000, 10000,
+            "--visual-cue-id", 1, "--visual-notes", visual_notes,
+            "--output", visual_output)
+        observed = json.loads(visual_output.read_text())["visual_context"]
+        assert observed["status"] == "observed"
+        assert observed["authored_sha256"] == digest(visual_notes)
+        assert observed["observations"][0]["cue_id"] == 1
+        invalid = json.loads(visual_notes.read_text())
+        invalid["observations"][0]["timestamp_ms"] += 1
+        visual_notes.write_text(json.dumps(invalid), encoding="utf-8")
+        rejected = subprocess.run([
+            "python3", str(TOOL), "bundle", str(reference_case), str(target),
+            "1000", "10000", "--visual-cue-id", "1", "--visual-notes",
+            str(visual_notes), "--output", str(visual_output),
+        ], capture_output=True, text=True)
+        assert rejected.returncode != 0
 
         # 6. A paired split is hash-bound and restores both files on write failure.
 
@@ -615,6 +781,125 @@ def main():
         revision = Path(replaced["decision"]).parent
         assert (revision / "source-before.srt").read_bytes() == original_source
         assert (revision / "target-before.srt").read_bytes() == original_target
+
+        # An alignment-informed repair retimes both languages independently.
+        layout_map = root / "repair-utterances.json"
+        layout_manifest = SEMANTIC["prepare"](working_pair, target, layout_map)
+        layout_alignment = root / "repair-alignment"
+        layout_alignment.mkdir()
+        alignment_units = layout_manifest["utterances"]
+        accepted_words = [
+            {"source_id": alignment_units[0]["id"], "text": "Merhaba.",
+             "start_ms": 1200, "end_ms": 3800},
+            {"source_id": alignment_units[1]["id"], "text": "Dünya.",
+             "start_ms": 4300, "end_ms": 7800},
+        ]
+        alignment_result = {
+            "video_sha256": digest(video), "model": "synthetic-aligner",
+            "audio_start_ms": 0, "audio_end_ms": 12_000,
+            "input_sha256": ALIGNER["alignment_input"](
+                alignment_units, 0, 12_000, digest(video), "synthetic-aligner"
+            ),
+            "utterances": [
+                {"id": unit["id"], "text": unit["text"],
+                 "source_cue_ids": unit["cue_ids"], "status": "aligned",
+                 "word_timings": [{"text": word["text"],
+                                   "start_ms": word["start_ms"],
+                                   "end_ms": word["end_ms"]}]}
+                for unit, word in zip(alignment_units, accepted_words)
+            ],
+        }
+        (layout_alignment / "000.json").write_text(
+            json.dumps(alignment_result), encoding="utf-8"
+        )
+        repair_layout_report = root / "repair-layout-audit.json"
+        LAYOUT_AUDIT["run"](video, layout_map, layout_alignment,
+                            repair_layout_report, 700, 25)
+        new_bundle = run("bundle", reference_case, target, 1000, 10000)["bundle"]
+        repair_decision = {
+            "start_ms": 1000, "end_ms": 10000,
+            "source_sha256": digest(working_pair), "target_sha256": digest(target),
+            "replace_source_ids": [1, 2], "replace_target_ids": [1, 2],
+            "reviewer": "synthetic self-check",
+            "reason": "Retimed separate language layouts with accepted word spans.",
+            "evidence": [new_bundle],
+            "review_result": synthetic_audio_review(
+                root, video, working_pair, 1000, 10000, "layout-repair"
+            ),
+            "semantic_manifest": str(layout_map),
+            "layout_report": str(repair_layout_report),
+            "alignment_source_ids": [unit["id"] for unit in alignment_units],
+            "alignment_reason": "The synthetic word spans anchor both display intervals.",
+            "accepted_words": accepted_words,
+            "source_cues": [
+                {"start_ms": 1000, "end_ms": 4200, "text": "Merhaba."},
+                {"start_ms": 4200, "end_ms": 8000, "text": "Dünya."},
+            ],
+            "target_cues": [
+                {"start_ms": 1000, "end_ms": 8000,
+                 "text": "Hello. World."},
+            ],
+        }
+        layout_decision_path = root / "layout-repair-decision.json"
+        layout_decision_path.write_text(json.dumps(repair_decision), encoding="utf-8")
+        retimed = run("layout-repair", reference_case, target, layout_decision_path)
+        assert retimed["source_sha256"] == digest(working_pair)
+        assert len(runpy.run_path(str(Path(__file__).with_name(
+            "subtitle-timing.py")))["read_cues"](target)) == 1
+        assert "Dünya." in working_pair.read_text()
+        assert "Hello. World." in target.read_text()
+        assert LAYOUT_AUDIT["layout_blockers"](
+            repair_layout_report, layout_map, video
+        )[0].startswith("Layout report is invalid")
+
+        # A direct text correction can repair English without an audio-model call.
+        semantic_source = root / "meaning.tr.srt"
+        semantic_target = root / "meaning.en.srt"
+        semantic_source.write_text(
+            "1\n00:00:01,000 --> 00:00:03,000\nGeldi.\n", encoding="utf-8"
+        )
+        semantic_target.write_text(
+            "1\n00:00:01,000 --> 00:00:03,000\nHe did not come.\n",
+            encoding="utf-8",
+        )
+        semantic_case = root / "meaning-case"
+        run("audit", video, semantic_source, semantic_case, "--language", "tr")
+        semantic_working = semantic_case / "working.tr.srt"
+        semantic_map = root / "meaning-map.json"
+        SEMANTIC["prepare"](semantic_working, semantic_target, semantic_map)
+        text_decision = {
+            "question_type": "translation_semantics",
+            "start_ms": 1000, "end_ms": 3000,
+            "source_sha256": digest(semantic_working),
+            "target_sha256": digest(semantic_target),
+            "replace_source_ids": [1], "replace_target_ids": [1],
+            "reviewer": "synthetic agent test", "reason": "Geldi is affirmative.",
+            "evidence": [str(semantic_map)],
+            "text_evidence": [{"kind": "source_text", "path": str(semantic_working),
+                               "sha256": digest(semantic_working)},
+                              {"kind": "scene_context", "path": str(semantic_map),
+                               "sha256": digest(semantic_map)}],
+            "cues": [{"start_ms": 1000, "end_ms": 3000,
+                      "source_text": "Geldi.", "target_text": "He came."}],
+        }
+        text_path = root / "meaning-decision.json"
+        text_path.write_text(json.dumps(text_decision), encoding="utf-8")
+        original_meaning_source = semantic_working.read_bytes()
+        repaired_meaning = run("replace-pair", semantic_case,
+                               semantic_target, text_path)
+        assert semantic_working.read_bytes() == original_meaning_source
+        assert semantic_target.read_text().endswith("He came.\n")
+        assert Path(repaired_meaning["decision"]).is_file()
+        text_decision["source_sha256"] = digest(semantic_working)
+        text_decision["target_sha256"] = digest(semantic_target)
+        text_decision["cues"][0]["source_text"] = "Gitmedi."
+        text_path.write_text(json.dumps(text_decision), encoding="utf-8")
+        rejected_text = subprocess.run(
+            ["python3", str(TOOL), "replace-pair", str(semantic_case),
+             str(semantic_target), str(text_path)], capture_output=True, text=True,
+        )
+        assert rejected_text.returncode != 0
+        assert "change English text only" in rejected_text.stderr
 
         # 7. A long silent-looking gap remains reviewable from start to end.
 

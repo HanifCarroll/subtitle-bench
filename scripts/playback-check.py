@@ -111,6 +111,9 @@ def check(video, source, target, output, extra):
                                 "at_ms": at_ms, "cue_id": cue["id"] if cue else None,
                                 "cue_text": cue["text"] if cue else None,
                                 "rendered_frame": str(frame),
+                                "rendered_frame_sha256": digest(frame),
+                                "baseline_frame": str(baseline),
+                                "baseline_frame_sha256": digest(baseline),
                                 "bottom_y_difference": difference,
                                 "visible_pixels_changed": difference > 0.05,
                                 "expected_visible": cue is not None})

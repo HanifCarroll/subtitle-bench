@@ -20,5 +20,6 @@ python3 scripts/test-google-second-opinion.py
 python3 scripts/test-translate-subtitles.py
 python3 scripts/test-layout-cues.py
 python3 scripts/test-layout-audit.py
+python3 scripts/test-semantic-review.py
 python3 scripts/test-elevenlabs-scribe-trial.py
 ```
