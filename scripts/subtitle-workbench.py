@@ -1327,6 +1327,7 @@ def audio_check(args):
         raise ValueError("Scan end must follow its start")
 
     identity = {"video_sha256": case["video_sha256"], "model": args.model,
+                "model_revision": args.model_revision,
                 "language": args.language, "window_ms": window_ms,
                 "max_tokens": args.max_tokens}
     if args.cache.exists():
@@ -1352,7 +1353,7 @@ def audio_check(args):
                 "Run audio-check with a Python environment containing mlx-audio"
             ) from error
 
-        model = load_model(args.model)
+        model = load_model(args.model, revision=args.model_revision)
         with tempfile.TemporaryDirectory(prefix="subtitle-audio-check-") as directory:
             clip = Path(directory) / "window.wav"
             for start in missing:
@@ -1401,7 +1402,8 @@ def audio_check(args):
 
     report = {"video": str(video), "video_sha256": case["video_sha256"],
               "source": str(working), "source_sha256": file_hash(working),
-              "model": args.model, "language": args.language,
+              "model": args.model, "model_revision": args.model_revision,
+              "language": args.language,
               "start_ms": start_ms, "end_ms": end_ms, "window_ms": window_ms,
               "transcript_cache": str(args.cache), "windows": windows,
               "issues": [item for item in windows if item["issue"]],
@@ -1430,6 +1432,7 @@ def episode_check(args):
     audio_check(Namespace(
         case=case_directory, output=audio_report,
         cache=args.output / "audio-transcripts.json", model=args.model,
+        model_revision=args.model_revision,
         language=args.audio_language, window_seconds=30,
         start_seconds=0, end_seconds=None, max_tokens=256,
     ))
@@ -1848,6 +1851,7 @@ def main():
     checking_audio.add_argument("--output", type=Path, required=True)
     checking_audio.add_argument("--cache", type=Path, required=True)
     checking_audio.add_argument("--model", default="mlx-community/Qwen3-ASR-1.7B-4bit")
+    checking_audio.add_argument("--model-revision", default="78a389c776a5483b2d0d4ea5494e11012e0d6159")
     checking_audio.add_argument("--language", default="Turkish")
     checking_audio.add_argument("--window-seconds", type=float, default=30)
     checking_audio.add_argument("--start-seconds", type=float, default=0)
@@ -1870,6 +1874,7 @@ def main():
     checking_episode.add_argument("--target-language", required=True)
     checking_episode.add_argument("--output", type=Path, required=True)
     checking_episode.add_argument("--model", default="mlx-community/Qwen3-ASR-1.7B-4bit")
+    checking_episode.add_argument("--model-revision", default="78a389c776a5483b2d0d4ea5494e11012e0d6159")
     checking_episode.add_argument("--audio-language", default="Turkish")
     checking_episode.add_argument("--semantic-manifest", type=Path)
     checking_episode.add_argument("--semantic-reviews", type=Path)

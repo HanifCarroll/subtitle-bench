@@ -1,6 +1,6 @@
-# Frozen qualification protocol, version 1
+# Qualification protocol, version 2
 
-This protocol is fixed before opening any held-out subtitle text or audio result. It tests whether a fresh agent can use the reusable process on an unseen episode. Development episodes 38–40 and all earlier pilot clips are excluded from qualification. A repaired qualification case becomes a regression case; the revised process must use new held-out episodes.
+This protocol is fixed before opening any version 2 held-out subtitle text or audio result. It tests whether a fresh agent can use the reusable process on an unseen episode. Development episodes 38–40, version 1 qualification episodes 016/064/099, and all earlier pilot clips are excluded. A repaired qualification case becomes a regression case; the revised process must use new held-out episodes.
 
 ## Input contract and cohort
 
@@ -10,9 +10,9 @@ The cohort was chosen from filename and ffprobe duration metadata before reviewi
 
 | Case | Inputs | Video duration | Purpose |
 | --- | --- | ---: | --- |
-| 016 | Video only; existing library sidecars are outside the allowed input | 78.7 min | End-to-end source recovery and English from video |
-| 064 | Video, existing Turkish candidate, existing English candidate | 95.2 min | Long cut, preservation of correct candidate text, repair of errors |
-| 099 | Video and existing Turkish candidate; no English candidate | 83.1 min | Source validation and English production |
+| 007 | Video only; existing library sidecars are outside the allowed input | 82.9 min | End-to-end source recovery and English from video |
+| 021 | Video, existing Turkish candidate, existing English candidate | 72.2 min | Source selection, preservation of correct content, repair of errors |
+| 077 | Video and existing Turkish candidate; no English candidate | 80.6 min | Source validation and English production |
 
 These durations and file presence are selection metadata, not quality results. The episodes must still be characterized for ordinary speech, short replies, overlap, music, loops, chunk seams, idioms, contextual meanings, and timing defects. If a category does not occur in this cohort, it remains untested and must be covered by a later held-out case or an explicitly labeled development regression.
 
@@ -20,13 +20,13 @@ These durations and file presence are selection metadata, not quality results. T
 
 `freeze.json` binds the prompt, protocol, workbench scripts, model file, and setup instructions by SHA-256. A run starts with `python3 scripts/qualification-runner.py verify`, then `start`; resuming repeats `start` with identical inputs. The runner rejects changed inputs or frozen files and records an event ledger. The agent model for this qualification is GPT-5.6 Luna with Max reasoning, in a fresh task with no previous episode conversation. It must not delegate, run memory tools, edit code, change prompts or thresholds, or inspect development/qualification answers. It may save case data under its private run directory.
 
-The source route is the one in `PROCESS.md`: audio-checked cut reference where supplied and suitable, otherwise Whisper large-v3 with 30-second cores and two-second overlap; full 30-second Qwen3 ASR comparison; targeted original-audio recovery; agent-written English; Turkish WhisperX alignment; paired timing repair; libass render and release dry check. Model revisions and observed environment are in `SETUP.md`. Any model substitution, hidden sidecar, new provider, prompt change, hand-written episode-specific script, or threshold tuning is a process change, not a successful qualification run.
+The source route is the one in `PROCESS.md`: audio-checked cut reference where supplied and suitable, otherwise Whisper large-v3 with 30-second cores and two-second overlap; full 30-second Qwen3 ASR comparison at the pinned revision; targeted original-audio recovery; source-bound agent-written English batches where needed; Turkish WhisperX alignment; paired timing repair; libass render and release dry check. The local ASR receipt route can document a supported decision when both authentic outputs are complete; it is not an independent accuracy reference and cannot close a failed or repeated Qwen window by itself. Model revisions and observed environment are in `SETUP.md`. Any model substitution, hidden sidecar, new provider, prompt change, hand-written episode-specific script, or threshold tuning is a process change, not a successful qualification run.
 
 Billable provider use is **not authorized** in this cohort. The old Episode 40 plan grants no permission here. The agent can use local evidence and must identify a permission-limited stopping point separately from a technical inability. A later standing authorization would be a new frozen configuration and require fresh held-out cases.
 
 ## Completion and stopping rules
 
-The agent has up to eight active hours per episode. Make one full source transcription, reuse its unchanged clip receipts, and use the cached independent audio transcript for targeted rechecks and the final full check. A run stops earlier when it produces a complete candidate pair and a current release dry check, or when further recovery needs a service without authorization, audio is genuinely unrecoverable under `PROCESS.md`, the required environment is unavailable, or the work budget is reached. It must never label an unresolved queue as completion.
+The agent has up to eight active hours per episode. Make one full source transcription, reuse its unchanged clip receipts, and use the cached independent audio transcript for targeted rechecks and the final full check. A run stops earlier when it produces a complete candidate pair and a current release dry check, or when further recovery needs a service without authorization, audio is genuinely unrecoverable under `PROCESS.md`, the required environment is unavailable, or the work budget is reached. A large queue, missing English candidate, or failed first dry check is work to do, not itself a stop condition. It must never label an unresolved queue as completion.
 
 `production_complete` requires a full-duration Turkish and English candidate, no known ordinary intelligible omitted dialogue, no known material English error, no unresolved source/audio/timing question, a passing current dry release check, and zero user content decisions. It is **still linguistically unverified** until independent evaluation below. A candidate with an honest indistinct-speech cue is counted as unresolved content. A provider-permission stop, missing dependency, tool failure, or budget stop is `partial` or `failure`, not success. All three attempted cases stay in the denominator.
 
