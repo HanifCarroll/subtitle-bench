@@ -884,9 +884,6 @@ def main():
             "reviewer": "synthetic self-check",
             "reason": "Retimed separate language layouts with accepted word spans.",
             "evidence": [new_bundle],
-            "review_result": synthetic_audio_review(
-                root, video, working_pair, 1000, 10000, "layout-repair"
-            ),
             "semantic_manifest": str(layout_map),
             "layout_report": str(repair_layout_report),
             "alignment_source_ids": [unit["id"] for unit in alignment_units],

@@ -712,11 +712,14 @@ def replace_pair(args):
         blockers = SOURCE_REVIEW["evidence_blockers"](
             case_directory, evidence, start, end, case["video_sha256"],
         )
-        blockers.extend(SOURCE_REVIEW["review_result_blockers"](
-            case_directory, decision.get("review_result"), start, end,
-            case["video_sha256"], file_hash(source),
-            SOURCE_REVIEW["source_interval_sha256"](read_cues(source), start, end),
-        ))
+        # Accepted alignment can support a text-preserving layout repair.
+        # Source wording changes still require the two-stage audio review.
+        if not layout_mode or decision.get("review_result") is not None:
+            blockers.extend(SOURCE_REVIEW["review_result_blockers"](
+                case_directory, decision.get("review_result"), start, end,
+                case["video_sha256"], file_hash(source),
+                SOURCE_REVIEW["source_interval_sha256"](read_cues(source), start, end),
+            ))
         if blockers:
             raise ValueError("; ".join(blockers))
 
