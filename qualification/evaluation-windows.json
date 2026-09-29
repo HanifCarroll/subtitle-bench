@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "selection_rule": "five three-minute windows centered at 3, 27, 50, 73, and 97 percent, clamped to video duration",
+  "cases": [
+    {
+      "episode_id": "016",
+      "video_sha256": "ff849f67f290021ba67689c1e997e9baa476e55ba7056367d4fcc511e87bd271",
+      "duration_ms": 4719941,
+      "windows": [
+        {
+          "center_percent": 3,
+          "start_ms": 51598,
+          "end_ms": 231598
+        },
+        {
+          "center_percent": 27,
+          "start_ms": 1184384,
+          "end_ms": 1364384
+        },
+        {
+          "center_percent": 50,
+          "start_ms": 2269970,
+          "end_ms": 2449970
+        },
+        {
+          "center_percent": 73,
+          "start_ms": 3355557,
+          "end_ms": 3535557
+        },
+        {
+          "center_percent": 97,
+          "start_ms": 4488343,
+          "end_ms": 4668343
+        }
+      ]
+    },
+    {
+      "episode_id": "064",
+      "video_sha256": "dfed702d5b026b2bb4562d0f47bf983f4309ab8a830423ad94f9928dbb7b98a1",
+      "duration_ms": 5713581,
+      "windows": [
+        {
+          "center_percent": 3,
+          "start_ms": 81407,
+          "end_ms": 261407
+        },
+        {
+          "center_percent": 27,
+          "start_ms": 1452667,
+          "end_ms": 1632667
+        },
+        {
+          "center_percent": 50,
+          "start_ms": 2766790,
+          "end_ms": 2946790
+        },
+        {
+          "center_percent": 73,
+          "start_ms": 4080914,
+          "end_ms": 4260914
+        },
+        {
+          "center_percent": 97,
+          "start_ms": 5452174,
+          "end_ms": 5632174
+        }
+      ]
+    },
+    {
+      "episode_id": "099",
+      "video_sha256": "b6eb0aee08942b9aeda7ad809fe7384749e508f7cc31db66a2b13fbb988d65be",
+      "duration_ms": 4985061,
+      "windows": [
+        {
+          "center_percent": 3,
+          "start_ms": 59552,
+          "end_ms": 239552
+        },
+        {
+          "center_percent": 27,
+          "start_ms": 1255966,
+          "end_ms": 1435966
+        },
+        {
+          "center_percent": 50,
+          "start_ms": 2402530,
+          "end_ms": 2582530
+        },
+        {
+          "center_percent": 73,
+          "start_ms": 3549095,
+          "end_ms": 3729095
+        },
+        {
+          "center_percent": 97,
+          "start_ms": 4745509,
+          "end_ms": 4925509
+        }
+      ]
+    }
+  ]
+}
