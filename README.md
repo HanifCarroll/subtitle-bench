@@ -23,4 +23,6 @@ python3 scripts/test-layout-audit.py
 python3 scripts/test-semantic-review.py
 python3 scripts/test-elevenlabs-scribe-trial.py
 python3 scripts/test-production-paths.py
+python3 scripts/test-local-audio-review.py
+python3 scripts/test-agent-translate.py
 ```

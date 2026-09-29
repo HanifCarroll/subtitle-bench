@@ -685,7 +685,7 @@ def evidence_blockers(directory, paths, start_ms, end_ms, video_sha256):
 
 def review_result_blockers(directory, path, start_ms, end_ms, video_sha256,
                            source_sha256, source_interval_sha256=None):
-    """Require two traceable audio-review stages bound to the current source."""
+    """Require traceable audio evidence bound to the current source interval."""
     if not isinstance(path, str) or not (directory / path).is_file():
         return ["Audio review result is missing"]
     try:
@@ -707,6 +707,47 @@ def review_result_blockers(directory, path, start_ms, end_ms, video_sha256,
             or result["start_ms"] > start_ms or result["end_ms"] < end_ms
             or result.get("status") not in ("supported", "corrected", "model_artifact")):
         return ["Audio review result is stale, incomplete, or uncertain"]
+
+    # Local recognition plus an agent's explicit comparison can close an issue
+    # without claiming that an audio-capable provider or human heard the clip.
+    # The separate decision evidence must still cover the original interval.
+
+    if result.get("route") == "local_asr_agent":
+        observations = result.get("observations")
+        assessment = result.get("agent_assessment")
+        if (not isinstance(observations, list) or len(observations) < 2
+                or not isinstance(assessment, dict)
+                or not isinstance(assessment.get("reviewer"), str)
+                or not assessment["reviewer"].strip()
+                or not isinstance(assessment.get("reason"), str)
+                or not assessment["reason"].strip()
+                or assessment.get("heard_original_audio") is not False):
+            return ["Local audio review needs two observations and an honest agent assessment"]
+        models, receipts = set(), set()
+        for observation in observations:
+            if not isinstance(observation, dict):
+                return ["Local audio observation is malformed"]
+            model = observation.get("model")
+            raw = observation.get("raw_response")
+            if (observation.get("method") != "local_asr"
+                    or not isinstance(model, str) or not model.strip()
+                    or not isinstance(observation.get("model_version"), str)
+                    or not observation["model_version"].strip()
+                    or observation.get("video_sha256") != video_sha256
+                    or type(observation.get("start_ms")) is not int
+                    or type(observation.get("end_ms")) is not int
+                    or observation["start_ms"] > start_ms
+                    or observation["end_ms"] < end_ms
+                    or not isinstance(raw, str) or not (directory / raw).is_file()
+                    or not (directory / raw).read_bytes()
+                    or FILE_HASH(directory / raw) != observation.get("raw_response_sha256")):
+                return ["Local audio observation is incomplete, stale, or outside the interval"]
+            models.add(model)
+            receipts.add(raw)
+        if len(models) < 2 or len(receipts) < 2:
+            return ["Local audio review needs two distinct models and receipts"]
+        return []
+
     stages = result.get("stages")
     if not isinstance(stages, list) or len(stages) != 2:
         return ["Audio review needs independent observation and comparison"]

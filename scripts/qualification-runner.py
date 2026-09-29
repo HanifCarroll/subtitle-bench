@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +40,14 @@ def load_freeze(path=FREEZE):
         target = Path(model["path"])
         if not target.is_file() or digest(target) != model["sha256"]:
             raise ValueError(f"Frozen model differs: {target.name}")
+    for runtime in freeze.get("runtime_environments", []):
+        expected = (ROOT / runtime["packages"]).read_bytes()
+        result = subprocess.run(
+            ["uv", "pip", "freeze", "--python", runtime["python"]],
+            check=True, capture_output=True,
+        )
+        if result.stdout != expected:
+            raise ValueError(f"Frozen packages differ: {runtime['python']}")
     return freeze
 
 

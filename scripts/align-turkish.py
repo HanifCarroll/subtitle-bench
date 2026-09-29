@@ -97,16 +97,19 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
     duration = duration_ms(video)
     jobs = list(windows(manifest["utterances"], duration, core_ms))
     model_name = "mpoyraz/wav2vec2-xls-r-300m-cv7-turkish"
+    model_revision = "708639f50559d7970f462e13ec64d3f059ca89f6"
+    model_identity = f"{model_name}@{model_revision}"
     plan = []
     for core_start, core_end, audio_start, audio_end, selected in jobs:
         path = output / f"{core_start:09d}-{core_end:09d}.json"
         identity = alignment_input(selected, audio_start, audio_end,
-                                   video_sha256, model_name)
+                                   video_sha256, model_identity)
         cached = path.is_file() and json.loads(path.read_text()).get("input_sha256") == identity
         plan.append((path, identity, audio_start, audio_end, selected, cached))
     if dry_run:
         return {"windows": len(plan), "cached": sum(job[5] for job in plan),
-                "model": model_name, "video_sha256": video_sha256}
+                "model": model_name, "model_revision": model_revision,
+                "video_sha256": video_sha256}
 
     # 2. Load the verified Turkish aligner once and process only stale windows.
 
@@ -114,10 +117,16 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
     if not missing:
         return {"windows": len(plan), "cached": len(plan), "aligned": 0}
     import whisperx
+    from huggingface_hub import snapshot_download
     from whisperx.alignment import DEFAULT_ALIGN_MODELS_HF
     if DEFAULT_ALIGN_MODELS_HF.get("tr") != model_name:
         raise ValueError("Installed WhisperX selects a different Turkish aligner")
-    model, metadata = whisperx.load_align_model(language_code="tr", device="cpu")
+    snapshot = snapshot_download(model_name, revision=model_revision,
+                                 local_files_only=True)
+    model, metadata = whisperx.load_align_model(
+        language_code="tr", device="cpu", model_name=snapshot,
+        model_cache_only=True,
+    )
     output.mkdir(parents=True, exist_ok=True)
     for path, identity, audio_start, audio_end, selected, _ in missing:
         with tempfile.TemporaryDirectory(prefix="subtitle-align-") as directory:
@@ -150,7 +159,7 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
                                           "error": str(error)})
             report = {"video": str(video), "video_sha256": video_sha256,
                       "source_sha256": digest(source), "manifest": str(manifest_path),
-                      "model": model_name,
+                      "model": model_name, "model_revision": model_revision,
                       "whisperx_version": importlib.metadata.version("whisperx"),
                       "device": "cpu", "audio_start_ms": audio_start,
                       "audio_end_ms": audio_end, "audio_sha256": digest(audio),

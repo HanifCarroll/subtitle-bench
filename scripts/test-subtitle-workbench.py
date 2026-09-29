@@ -192,7 +192,9 @@ def main():
         cache = root / "audio-cache.json"
         cache.write_text(json.dumps({
             "video_sha256": digest(video),
-            "model": "synthetic-model", "language": "Turkish",
+            "model": "synthetic-model",
+            "model_revision": "78a389c776a5483b2d0d4ea5494e11012e0d6159",
+            "language": "Turkish",
             "window_ms": 30000, "max_tokens": 256,
             "windows": {"0": {"start_ms": 0, "end_ms": 12000,
                               "text": "Ne haber abi? Nasılsın bugün, nasıl gidiyor?"}},
