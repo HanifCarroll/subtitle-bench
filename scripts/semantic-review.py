@@ -88,6 +88,11 @@ def prepare(source, target, output, previous_path=None):
         interval = {"start_ms": cue["start"], "end_ms": cue["end"]}
         source_ids = [unit["id"] for unit in utterances
                       if overlap(unit, interval) >= 100]
+        if not source_ids:
+            source_ids = [unit["id"] for unit in utterances
+                          if unit["cue_ids"] == [cue["id"]]
+                          and unit["start_ms"] == cue["start"]
+                          and unit["end_ms"] == cue["end"]]
         translations.append({"id": identifier, "text": cue["text"],
                              "start_ms": cue["start"], "end_ms": cue["end"],
                              "cue_ids": [cue["id"]], "source_ids": source_ids,

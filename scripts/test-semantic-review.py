@@ -62,6 +62,20 @@ def decision(path, source_id, disposition, evidence, prior=None):
 
 
 class SemanticReviewTests(unittest.TestCase):
+    def test_prepare_links_identical_short_cues(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, target = root / "tr.srt", root / "en.srt"
+            source.write_text("1\n00:00:01,000 --> 00:00:01,080\nNe?\n", encoding="utf-8")
+            target.write_text("1\n00:00:01,000 --> 00:00:01,080\nWhat?\n", encoding="utf-8")
+            first_path = root / "first.json"
+            first = SEMANTIC["prepare"](source, target, first_path)
+            self.assertEqual(first["translations"][0]["source_ids"],
+                             [first["utterances"][0]["id"]])
+            second = SEMANTIC["prepare"](source, target, root / "second.json", first_path)
+            self.assertEqual(second["translations"][0]["source_ids"],
+                             [first["utterances"][0]["id"]])
+
     def test_authored_fingerprint_rejects_changed_english_and_context(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
