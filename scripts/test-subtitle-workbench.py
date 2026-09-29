@@ -106,6 +106,11 @@ def synthetic_layout_render(video, manifest_path, case, root):
 
 
 def main():
+    meaningful_overlap = runpy.run_path(str(TOOL))["meaningful_overlap"]
+    assert meaningful_overlap({"start": 1000, "end": 1080},
+                              {"start": 1000, "end": 1080})
+    assert not meaningful_overlap({"start": 1000, "end": 1080},
+                                  {"start": 1070, "end": 1150})
     comparison = runpy.run_path(str(TOOL))["compare_audio_window"]
     assert comparison("Ne haber abi? Nasılsın bugün, nasıl gidiyor?", "Ayyy!")["issue"] == (
         "possible_missing_or_wrong_subtitle"

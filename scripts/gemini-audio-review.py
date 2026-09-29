@@ -159,6 +159,9 @@ def two_stage_plan(plan):
     """Validate an exact, bounded set of private original-audio clips."""
     if (plan.get("kind") != "two_stage_audio_review"
             or plan.get("model") != "gemini-3.8-flash"
+            or ("max_output_tokens" in plan
+                and (type(plan["max_output_tokens"]) is not int
+                     or not 1 <= plan["max_output_tokens"] <= 8192))
             or type(plan.get("max_audio_seconds")) not in (int, float)
             or not 0 < plan["max_audio_seconds"] <= 90
             or plan.get("max_calls") != 6
@@ -222,7 +225,9 @@ def two_stage_review(client, plan_path, plan, selected):
             "start_ms": bundle["start_ms"], "end_ms": bundle["end_ms"],
             "clip_sha256": file_hash(audio), "status": "uploading",
             "prompt_version": "two-stage-audio-v1",
-            "settings": {"generation_config": "provider_default"},
+            "settings": {"generation_config": (
+                {"max_output_tokens": plan["max_output_tokens"]}
+                if "max_output_tokens" in plan else "provider_default")},
         }
         save_json(receipt, record)
         uploaded = client.files.upload(file=str(audio))
@@ -241,19 +246,28 @@ def two_stage_review(client, plan_path, plan, selected):
                 prompt_path = output / f"{label}-{stage}-prompt.txt"
                 raw_path = output / f"{label}-{stage}-raw.txt"
                 prompt_path.write_text(prompt, encoding="utf-8")
-                response = client.interactions.create(
-                    model=plan["model"],
-                    input=[{"type": "text", "text": prompt},
-                           {"type": "audio", "uri": uploaded.uri,
-                            "mime_type": uploaded.mime_type}],
-                )
+                request = {"model": plan["model"],
+                           "input": [{"type": "text", "text": prompt},
+                                     {"type": "audio", "uri": uploaded.uri,
+                                      "mime_type": uploaded.mime_type}]}
+                if "max_output_tokens" in plan:
+                    request["generation_config"] = {
+                        "max_output_tokens": plan["max_output_tokens"]}
+                response = client.interactions.create(**request)
                 raw_path.write_text(response.output_text or "", encoding="utf-8")
                 record[f"{stage}_prompt"] = str(prompt_path)
                 record[f"{stage}_prompt_sha256"] = file_hash(prompt_path)
+                record[f"{stage}_prompt_bytes"] = len(prompt.encode("utf-8"))
                 record[f"{stage}_raw_response"] = str(raw_path)
                 record[f"{stage}_raw_sha256"] = file_hash(raw_path)
                 record[f"{stage}_response_id"] = response.id
                 record[f"{stage}_output"] = response.output_text
+                usage = getattr(response, "usage", None)
+                if hasattr(usage, "model_dump"):
+                    record[f"{stage}_usage"] = usage.model_dump(
+                        mode="json", exclude_none=True)
+                elif isinstance(usage, dict):
+                    record[f"{stage}_usage"] = usage
                 if response.output_text:
                     record[f"{stage}_parsed"] = parsed_response(response.output_text)
                 record["status"] = f"{stage}_complete"

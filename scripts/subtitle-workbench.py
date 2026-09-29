@@ -1223,7 +1223,7 @@ def translation_audit(args):
 def meaningful_overlap(left, right):
     overlap = min(left["end"], right["end"]) - max(left["start"], right["start"])
     shorter = min(left["end"] - left["start"], right["end"] - right["start"])
-    return overlap >= max(100, min(500, shorter // 4))
+    return overlap >= min(shorter, max(100, min(500, shorter // 4)))
 
 
 def words(text):
