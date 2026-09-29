@@ -12,6 +12,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 BINDER = runpy.run_path(str(SCRIPTS / "bind-gemini-review.py"))
 SOURCE = runpy.run_path(str(SCRIPTS / "source-review.py"))
+GEMINI = runpy.run_path(str(SCRIPTS / "gemini-audio-review.py"))
 
 
 def digest(path):
@@ -23,6 +24,13 @@ def save(path, value):
 
 
 class BindGeminiReviewTest(unittest.TestCase):
+    def test_prose_wrapped_single_json_fence_can_be_parsed_without_another_call(self):
+        raw = 'Observation follows.\n```json\n{"label":"relevant_speech"}\n```\n'
+        self.assertEqual(GEMINI["parsed_response"](raw),
+                         {"label": "relevant_speech"})
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            GEMINI["parsed_response"](raw + raw)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

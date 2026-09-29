@@ -23,9 +23,11 @@ def aligned_units(directory, manifest, video_sha256):
             raise ValueError("Alignment report belongs to another video")
         current_units = [expected[item["id"]] for item in report.get("utterances", [])
                          if item.get("id") in expected]
+        model_identity = (f"{report['model']}@{report['model_revision']}"
+                          if report.get("model_revision") else report["model"])
         identity = ALIGNER["alignment_input"](
             current_units, report["audio_start_ms"], report["audio_end_ms"],
-            video_sha256, report["model"])
+            video_sha256, model_identity)
         report_stale = identity != report.get("input_sha256")
         for result in report.get("utterances", []):
             unit = expected.get(result.get("id"))

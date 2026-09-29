@@ -14,6 +14,37 @@ ALIGNER = runpy.run_path(str(Path(__file__).with_name("align-turkish.py")))
 
 
 class LayoutAuditTests(unittest.TestCase):
+    def test_alignment_identity_preserves_legacy_and_pinned_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video_hash = "a" * 64
+            unit = {"id": "u1", "text": "Merhaba.", "start_ms": 1000,
+                    "end_ms": 2000, "cue_ids": [1]}
+            manifest = {"utterances": [unit]}
+            base = {"video_sha256": video_hash, "model": "test-aligner",
+                    "audio_start_ms": 0, "audio_end_ms": 3000,
+                    "utterances": [{"id": "u1", "text": "Merhaba.",
+                                    "word_timings": [{"text": "Merhaba.",
+                                                      "start_ms": 1100,
+                                                      "end_ms": 1900}]}]}
+            for name, revision in (("legacy", None), ("pinned", "revision-1")):
+                output = root / name
+                output.mkdir()
+                report = dict(base)
+                if revision:
+                    report["model_revision"] = revision
+                identity = (f"test-aligner@{revision}" if revision
+                            else "test-aligner")
+                report["input_sha256"] = ALIGNER["alignment_input"](
+                    [unit], 0, 3000, video_hash, identity)
+                report["utterances"][0]["source_cue_ids"] = [1]
+                (output / "window.json").write_text(json.dumps(report),
+                                                     encoding="utf-8")
+                results, stale = AUDIT["aligned_units"](
+                    output, manifest, video_hash)
+                self.assertEqual(stale, set())
+                self.assertIn("u1", results)
+
     def test_early_tail_gap_and_missing_link_are_review_flags(self):
         manifest = {"utterances": [
             {"id": "u1", "text": "Merhaba.", "start_ms": 1000,

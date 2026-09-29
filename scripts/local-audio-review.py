@@ -31,16 +31,42 @@ def covering(items, start_ms, end_ms, first, last):
     return selected
 
 
-def create(video, source, start_ms, end_ms, transcription, audio_report,
-           decision_path, output):
-    # 1. Verify both recognizers ran on this video and cover the requested span.
+def whisper_evidence(transcription, video_hash, start_ms, end_ms):
+    """Read either a complete whisper.cpp run or saved MLX Whisper windows."""
+    mlx_manifest = transcription / "bundle-manifest.json"
+    if mlx_manifest.is_file():
+        manifest = json.loads(mlx_manifest.read_text(encoding="utf-8"))
+        if manifest.get("video_sha256") != video_hash:
+            raise ValueError("MLX Whisper manifest belongs to another video")
+        entries = []
+        for item in manifest["windows"]:
+            srt = Path(item["whisper_srt"]).resolve(strict=True)
+            receipt = srt.parent.parent / f"{srt.stem}.json"
+            saved = json.loads(receipt.read_text(encoding="utf-8"))
+            if (type(saved.get("start_ms")) is not int
+                    or type(saved.get("end_ms")) is not int):
+                raise ValueError("MLX Whisper window has no interval")
+            if saved["start_ms"] >= end_ms or saved["end_ms"] <= start_ms:
+                continue
+            if (saved.get("status") != "complete"
+                    or saved.get("video_sha256") != video_hash
+                    or saved.get("language") != "tr"
+                    or saved.get("start_ms") != item["clip_start_ms"]
+                    or not Path(saved.get("audio_clip", "")).is_file()
+                    or SOURCE["FILE_HASH"](Path(saved["audio_clip"])) != saved.get("audio_sha256")
+                    or " ".join(cue["text"] for cue in TIMING["read_cues"](srt))
+                    != saved.get("text")):
+                raise ValueError("MLX Whisper window is incomplete or changed")
+            entries.append({"start_ms": saved["start_ms"],
+                            "end_ms": saved["end_ms"], "receipt": str(receipt),
+                            "receipt_sha256": SOURCE["FILE_HASH"](receipt),
+                            "srt": str(srt), "srt_sha256": SOURCE["FILE_HASH"](srt),
+                            "text": saved["text"]})
+        selected = covering(entries, start_ms, end_ms, "start_ms", "end_ms")
+        return (selected, manifest["windows"][0].get("model", "mlx-community/whisper-large-v3-mlx"),
+                "unrecorded_legacy", selected[0]["start_ms"], selected[-1]["end_ms"],
+                {"manifest_sha256": SOURCE["FILE_HASH"](mlx_manifest)})
 
-    video, source = video.resolve(strict=True), source.resolve(strict=True)
-    output = output.resolve()
-    if not 0 <= start_ms < end_ms or output.exists():
-        raise ValueError("Use a positive interval and a new output path")
-    video_hash = SOURCE["FILE_HASH"](video)
-    source_hash = SOURCE["FILE_HASH"](source)
     run = json.loads((transcription / "run.json").read_text(encoding="utf-8"))
     manifest = json.loads((transcription / "manifest.json").read_text(encoding="utf-8"))
     if (run.get("video_sha256") != video_hash
@@ -55,10 +81,10 @@ def create(video, source, start_ms, end_ms, transcription, audio_report,
             or joined_receipt.read_text(encoding="utf-8").strip()
             != SOURCE["FILE_HASH"](transcription / "manifest.json")):
         raise ValueError("Whisper manifest differs from its joined draft")
-    whisper_clips = covering(manifest["clips"], start_ms, end_ms,
-                             "core_start_ms", "core_end_ms")
-    whisper_data = []
-    for clip in whisper_clips:
+    clips = covering(manifest["clips"], start_ms, end_ms,
+                     "core_start_ms", "core_end_ms")
+    selected = []
+    for clip in clips:
         srt = Path(clip["srt"]).resolve(strict=True)
         completion = srt.with_suffix(".complete.json")
         saved = json.loads(completion.read_text(encoding="utf-8"))
@@ -68,10 +94,26 @@ def create(video, source, start_ms, end_ms, transcription, audio_report,
                 or any(saved.get("clip", {}).get(key) != value
                        for key, value in expected_clip.items())):
             raise ValueError("Whisper clip differs from its completion receipt")
-        whisper_data.append({
-            **clip, "srt_sha256": SOURCE["FILE_HASH"](srt),
-            "text": srt.read_text(encoding="utf-8"),
-        })
+        selected.append({**clip, "srt_sha256": SOURCE["FILE_HASH"](srt),
+                         "text": srt.read_text(encoding="utf-8")})
+    return (selected, "Whisper large-v3", run["model_sha256"],
+            clips[0]["core_start_ms"], clips[-1]["core_end_ms"],
+            {"run_sha256": SOURCE["FILE_HASH"](transcription / "run.json"),
+             "manifest_sha256": SOURCE["FILE_HASH"](transcription / "manifest.json")})
+
+
+def create(video, source, start_ms, end_ms, transcription, audio_report,
+           decision_path, output):
+    # 1. Verify both recognizers ran on this video and cover the requested span.
+
+    video, source = video.resolve(strict=True), source.resolve(strict=True)
+    output = output.resolve()
+    if not 0 <= start_ms < end_ms or output.exists():
+        raise ValueError("Use a positive interval and a new output path")
+    video_hash = SOURCE["FILE_HASH"](video)
+    source_hash = SOURCE["FILE_HASH"](source)
+    (whisper_data, whisper_model, whisper_version, whisper_start, whisper_end,
+     whisper_origin) = whisper_evidence(transcription, video_hash, start_ms, end_ms)
 
     audio_report = audio_report.resolve(strict=True)
     qwen = json.loads(audio_report.read_text(encoding="utf-8"))
@@ -96,11 +138,8 @@ def create(video, source, start_ms, end_ms, transcription, audio_report,
     qwen_path = output.with_name(output.stem + ".qwen.json")
     if whisper_path.exists() or qwen_path.exists():
         raise ValueError("Evidence output already exists")
-    save(whisper_path, {
-        "video_sha256": video_hash, "run_sha256": SOURCE["FILE_HASH"](transcription / "run.json"),
-        "manifest_sha256": SOURCE["FILE_HASH"](transcription / "manifest.json"),
-        "clips": whisper_data,
-    })
+    save(whisper_path, {"video_sha256": video_hash, **whisper_origin,
+                        "clips": whisper_data})
     save(qwen_path, {
         "video_sha256": video_hash, "audio_report_sha256": SOURCE["FILE_HASH"](audio_report),
         "windows": qwen_windows,
@@ -112,10 +151,9 @@ def create(video, source, start_ms, end_ms, transcription, audio_report,
         ),
         "start_ms": start_ms, "end_ms": end_ms, "status": decision["status"],
         "observations": [
-            {"method": "local_asr", "model": "Whisper large-v3",
-             "model_version": run["model_sha256"], "video_sha256": video_hash,
-             "start_ms": whisper_clips[0]["core_start_ms"],
-             "end_ms": whisper_clips[-1]["core_end_ms"],
+            {"method": "local_asr", "model": whisper_model,
+             "model_version": whisper_version, "video_sha256": video_hash,
+             "start_ms": whisper_start, "end_ms": whisper_end,
              "raw_response": str(whisper_path),
              "raw_response_sha256": SOURCE["FILE_HASH"](whisper_path)},
             {"method": "local_asr", "model": qwen["model"],

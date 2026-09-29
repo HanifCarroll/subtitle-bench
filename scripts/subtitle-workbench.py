@@ -1360,9 +1360,12 @@ def audio_check(args):
                 "max_tokens": args.max_tokens}
     if args.cache.exists():
         cache = json.loads(args.cache.read_text(encoding="utf-8"))
-        if any(cache.get(key) != value for key, value in identity.items()):
+        legacy_revision = "model_revision" not in cache
+        checked_keys = (key for key in identity if key != "model_revision" or not legacy_revision)
+        if any(cache.get(key) != identity[key] for key in checked_keys):
             raise ValueError("Audio transcript cache belongs to different inputs or settings")
     else:
+        legacy_revision = False
         cache = {**identity, "windows": {}}
 
     # 2. Transcribe only uncached windows of original audio, with one model load.
@@ -1373,6 +1376,8 @@ def audio_check(args):
         if (str(start) not in cache["windows"]
             or cache["windows"][str(start)]["end_ms"] != min(start + window_ms, end_ms))
     ]
+    if missing and legacy_revision:
+        raise ValueError("Legacy audio cache has no recorded model revision; start a new pinned cache")
     if missing:
         try:
             from mlx_audio.stt.utils import load_model
@@ -1430,10 +1435,13 @@ def audio_check(args):
 
     report = {"video": str(video), "video_sha256": case["video_sha256"],
               "source": str(working), "source_sha256": file_hash(working),
-              "model": args.model, "model_revision": args.model_revision,
+              "model": args.model,
+              "model_revision": ("unrecorded_legacy" if legacy_revision
+                                 else args.model_revision),
               "language": args.language,
               "start_ms": start_ms, "end_ms": end_ms, "window_ms": window_ms,
-              "transcript_cache": str(args.cache), "windows": windows,
+              "transcript_cache": str(args.cache),
+              "windows": windows,
               "issues": [item for item in windows if item["issue"]],
               "note": "ASR disagreement raises review questions; silence or agreement does not clear audio."}
     save_json(args.output, report)

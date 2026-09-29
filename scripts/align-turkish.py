@@ -104,10 +104,18 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
         path = output / f"{core_start:09d}-{core_end:09d}.json"
         identity = alignment_input(selected, audio_start, audio_end,
                                    video_sha256, model_identity)
-        cached = path.is_file() and json.loads(path.read_text()).get("input_sha256") == identity
-        plan.append((path, identity, audio_start, audio_end, selected, cached))
+        saved = json.loads(path.read_text()) if path.is_file() else {}
+        legacy_identity = alignment_input(selected, audio_start, audio_end,
+                                          video_sha256, model_name)
+        legacy_cached = (saved.get("model") == model_name
+                         and not saved.get("model_revision")
+                         and saved.get("input_sha256") == legacy_identity)
+        cached = saved.get("input_sha256") == identity or legacy_cached
+        plan.append((path, identity, audio_start, audio_end, selected, cached,
+                     legacy_cached))
     if dry_run:
         return {"windows": len(plan), "cached": sum(job[5] for job in plan),
+                "legacy_revision_unrecorded": sum(job[6] for job in plan),
                 "model": model_name, "model_revision": model_revision,
                 "video_sha256": video_sha256}
 
@@ -115,7 +123,8 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
 
     missing = [job for job in plan if not job[5]]
     if not missing:
-        return {"windows": len(plan), "cached": len(plan), "aligned": 0}
+        return {"windows": len(plan), "cached": len(plan), "aligned": 0,
+                "legacy_revision_unrecorded": sum(job[6] for job in plan)}
     import whisperx
     from huggingface_hub import snapshot_download
     from whisperx.alignment import DEFAULT_ALIGN_MODELS_HF
@@ -128,7 +137,7 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
         model_cache_only=True,
     )
     output.mkdir(parents=True, exist_ok=True)
-    for path, identity, audio_start, audio_end, selected, _ in missing:
+    for path, identity, audio_start, audio_end, selected, _, _ in missing:
         with tempfile.TemporaryDirectory(prefix="subtitle-align-") as directory:
             audio = Path(directory) / "original.wav"
             subprocess.run([
@@ -171,7 +180,8 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
             print(json.dumps({"window": path.name, "utterances": len(selected),
                               "seconds": report["seconds"]}), flush=True)
     return {"windows": len(plan), "cached": len(plan) - len(missing),
-            "aligned": len(missing)}
+            "aligned": len(missing),
+            "legacy_revision_unrecorded": sum(job[6] for job in plan)}
 
 
 def main():

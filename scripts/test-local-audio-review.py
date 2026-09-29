@@ -14,6 +14,39 @@ WRITE_SRT = runpy.run_path(str(Path(__file__).with_name("join-clip-drafts.py")))
 
 
 class LocalAudioReviewTest(unittest.TestCase):
+    def test_saved_mlx_whisper_window_requires_current_audio_and_srt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "srt").mkdir()
+            (root / "clips").mkdir()
+            audio = root / "clips/000.wav"
+            audio.write_bytes(b"saved audio")
+            srt = root / "srt/000.srt"
+            WRITE_SRT(srt, [{"start_ms": 100, "end_ms": 900,
+                             "text": "Merhaba."}])
+            video_hash = "a" * 64
+            (root / "bundle-manifest.json").write_text(json.dumps({
+                "video_sha256": video_hash,
+                "model": "mlx-community/whisper-large-v3-mlx",
+                "windows": [{"clip_start_ms": 0, "whisper_srt": str(srt)}],
+            }), encoding="utf-8")
+            receipt = root / "000.json"
+            receipt.write_text(json.dumps({
+                "status": "complete", "video_sha256": video_hash,
+                "start_ms": 0, "end_ms": 1000, "language": "tr",
+                "audio_clip": str(audio), "audio_sha256": SOURCE["FILE_HASH"](audio),
+                "text": "Merhaba.",
+            }), encoding="utf-8")
+            selected, model, revision, start, end, _ = LOCAL["whisper_evidence"](
+                root, video_hash, 100, 900)
+            self.assertEqual((model, revision, start, end),
+                             ("mlx-community/whisper-large-v3-mlx",
+                              "unrecorded_legacy", 0, 1000))
+            self.assertEqual(selected[0]["text"], "Merhaba.")
+            audio.write_bytes(b"changed audio")
+            with self.assertRaisesRegex(ValueError, "changed"):
+                LOCAL["whisper_evidence"](root, video_hash, 100, 900)
+
     def test_receipt_is_built_from_current_whisper_and_qwen_runs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

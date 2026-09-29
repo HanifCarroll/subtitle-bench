@@ -116,6 +116,11 @@ INDEPENDENT_PROMPT = (
 COMPARISON_PROMPT = (
     "Listen to the same original audio again. Compare it with the independent "
     "observation and the supplied Turkish, English, reference, and ASR candidates. "
+    "Candidate cues may cross the clip boundary: never claim that words outside "
+    "the supplied audio are absent, or propose a repair for an utterance whose "
+    "ending is outside the clip. If your new exact-word reading materially "
+    "differs from your independent observation, report that disagreement as "
+    "unresolved unless the audio itself explains the change. "
     "Return JSON with the supported acoustic outcome for each disputed interval, "
     "supported corrections, omitted utterances, unsupported subtitle text, "
     "meaning-changing differences, and unresolved ambiguities. Explain any "
@@ -130,6 +135,11 @@ COMPARISON_PROMPT = (
 def parsed_response(raw):
     """Keep a machine-readable copy without accepting prose as a finding."""
     content = raw.strip()
+    fenced = re.findall(r"```(?:json)?\s*([\s\S]*?)```", content)
+    if fenced and (len(fenced) != 1 or not fenced[0].strip()):
+        raise ValueError("Audio review response has ambiguous JSON fences")
+    if fenced:
+        content = fenced[0].strip()
     if content.startswith("```json"):
         content = content[7:]
     elif content.startswith("```"):
@@ -223,21 +233,45 @@ def two_stage_review(client, plan_path, plan, selected):
                     and saved.get("clip_sha256") == file_hash(audio)
                     and saved.get("provider_file_deleted") is True):
                 continue
-            raise ValueError(f"Review interrupted at {label}; inspect its receipt")
-
-        record = {
-            "provider": "google-gemini", "model": plan["model"],
-            "bundle": str(bundle_path), "bundle_sha256": file_hash(bundle_path),
-            "video_sha256": bundle["video_sha256"],
-            "source_sha256": bundle["source_sha256"],
-            "target_sha256": bundle["target_sha256"],
-            "start_ms": bundle["start_ms"], "end_ms": bundle["end_ms"],
-            "clip_sha256": file_hash(audio), "status": "uploading",
-            "prompt_version": "two-stage-audio-v2",
-            "settings": {"generation_config": (
-                {"max_output_tokens": plan["max_output_tokens"]}
-                if "max_output_tokens" in plan else "provider_default")},
-        }
+            if (saved.get("status") != "independent_response_saved"
+                    or saved.get("provider_file_deleted") is not True
+                    or saved.get("model_calls_attempted") != 1
+                    or saved.get("clip_sha256") != file_hash(audio)
+                    or saved.get("bundle_sha256") != file_hash(bundle_path)
+                    or saved.get("video_sha256") != bundle["video_sha256"]
+                    or saved.get("source_sha256") != bundle["source_sha256"]
+                    or saved.get("target_sha256") != bundle["target_sha256"]):
+                raise ValueError(f"Review interrupted at {label}; inspect its receipt")
+            raw = Path(saved["independent_raw_response"])
+            prompt = Path(saved["independent_prompt"])
+            if (not raw.is_file() or not prompt.is_file()
+                    or file_hash(raw) != saved.get("independent_raw_sha256")
+                    or file_hash(prompt) != saved.get("independent_prompt_sha256")):
+                raise ValueError(f"Independent response changed at {label}")
+            record = saved
+            record["independent_parsed"] = parsed_response(raw.read_text(encoding="utf-8"))
+            record["upload_history"] = [{"remote_file_name": record["remote_file_name"],
+                                         "provider_file_deleted": True}]
+            record["audio_uploads_attempted"] = 2
+            stages = ("comparison",)
+        else:
+            record = {
+                "provider": "google-gemini", "model": plan["model"],
+                "bundle": str(bundle_path), "bundle_sha256": file_hash(bundle_path),
+                "video_sha256": bundle["video_sha256"],
+                "source_sha256": bundle["source_sha256"],
+                "target_sha256": bundle["target_sha256"],
+                "start_ms": bundle["start_ms"], "end_ms": bundle["end_ms"],
+                "clip_sha256": file_hash(audio), "status": "uploading",
+                "audio_uploads_attempted": 1,
+                "prompt_version": "two-stage-audio-v3",
+                "settings": {"generation_config": (
+                    {"max_output_tokens": plan["max_output_tokens"]}
+                    if "max_output_tokens" in plan else "provider_default")},
+            }
+            stages = ("independent", "comparison")
+        record["provider_file_deleted"] = False
+        record["status"] = "uploading"
         save_json(receipt, record)
         uploaded = client.files.upload(file=str(audio))
         record["remote_file_name"] = uploaded.name
@@ -245,7 +279,7 @@ def two_stage_review(client, plan_path, plan, selected):
         save_json(receipt, record)
 
         try:
-            for stage in ("independent", "comparison"):
+            for stage in stages:
                 prompt = INDEPENDENT_PROMPT if stage == "independent" else (
                     COMPARISON_PROMPT + "\n" + json.dumps({
                         "independent_observation": record["independent_output"],
