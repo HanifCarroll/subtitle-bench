@@ -280,6 +280,62 @@ def evidence_disagreements(directory, case):
     return issues
 
 
+def saved_scene_evidence(directory, case, start_ms, end_ms):
+    """Expose registered original receipts in the existing scene review, offline."""
+    observations = []
+    for entry in case.get("saved_evidence", []):
+        path = directory / entry["path"]
+        first, last = entry["start_ms"], entry["end_ms"]
+        if not 0 <= first < last <= case["duration_ms"]:
+            raise ValueError("Saved evidence has an invalid review interval")
+        if FILE_HASH(path) != entry["sha256"]:
+            raise ValueError("Saved scene evidence changed")
+        if first >= end_ms or last <= start_ms:
+            continue
+        if path.suffix == ".srt":
+            rows = [{"start_ms": c["start"], "end_ms": c["end"],
+                     "text": c["text"], "kind": "asr"} for c in READ_CUES(path)]
+            model = entry["model"]
+        else:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if raw.get("status") != "complete" or raw.get("video_sha256") != case["video_sha256"]:
+                raise ValueError("Saved scene receipt is incomplete or from another video")
+            model = raw["model"]
+            if "comparison_parsed" in raw:
+                rows = [{"start_ms": raw["start_ms"] + round(r["interval"][0] * 1000),
+                         "end_ms": raw["start_ms"] + round(r["interval"][1] * 1000),
+                         "text": r["evidence_explanation"], "kind": "saved_review",
+                         "candidate": r["current_wording"],
+                         "alternative": r["proposed_repair"]}
+                        for r in raw["comparison_parsed"]]
+            else:
+                rows = [{"start_ms": round(w["start"] * 1000),
+                         "end_ms": round(w["end"] * 1000),
+                         "text": w["text"], "kind": "asr"}
+                        for w in raw["raw_response"]["words"] if w["type"] == "word"]
+        for row in rows:
+            if row["start_ms"] < min(last, end_ms) and row["end_ms"] > max(first, start_ms):
+                observations.append({**row, "origin": str(path),
+                                     "origin_sha256": entry["sha256"], "model": model})
+    return observations
+
+
+def saved_evidence_questions(directory, case, cues):
+    """Saved rejections and words inside gaps are questions, never automatic edits."""
+    questions = []
+    rows = saved_scene_evidence(directory, case, 0, case["duration_ms"])
+    for row in rows:
+        evidence = [{"path": row["origin"], "sha256": row["origin_sha256"]}]
+        key = hashlib.sha256((row["origin"] + str(row["start_ms"])).encode()).hexdigest()[:16]
+        if row["kind"] == "saved_review":
+            questions.append(issue("evidence_disagreement", row["start_ms"], row["end_ms"],
+                                   key, summary=row["text"], evidence=evidence))
+        elif not any(c["start"] < row["end_ms"] and c["end"] > row["start_ms"] for c in cues):
+            questions.append(issue("possible_speech_gap", row["start_ms"], row["end_ms"],
+                                   "saved-" + key, summary=row["text"], evidence=evidence))
+    return questions
+
+
 def long_subtitle_gaps(cues, duration_ms, minimum_ms=10_000):
     """Flag cue-free spans without depending on a voice detector."""
     gaps = []
@@ -483,6 +539,7 @@ def build_queue(directory):
                 )
 
     items.extend(evidence_disagreements(directory, case))
+    items.extend(saved_evidence_questions(directory, case, cues))
 
     items.sort(key=lambda item: (item["start_ms"], item["end_ms"], item["id"]))
     report = {
@@ -613,6 +670,7 @@ def inspect(directory, at_seconds, before, after):
         "seams": seams,
         "issues": current_issues,
         "recorded_decisions": decisions,
+        "saved_evidence": saved_scene_evidence(directory, case, start, end),
         "note": "The tool does not verify words by hearing audio. An audio-capable reviewer must check the original clip.",
     }
     path = clips / f"{stem}.json"
@@ -962,9 +1020,17 @@ def record_decision(directory, decision_path):
                   if item["id"] == decision["issue_id"]), None)
     if issue is None:
         raise ValueError("Decision issue_id is absent from the current review queue")
+    if issue.get("evidence"):
+        assessment = decision.get("evidence_assessment")
+        if assessment not in ("recognition_artifact", "supported_alternative", "material_unresolved"):
+            raise ValueError("Saved evidence needs an explicit disagreement assessment")
+        if (assessment == "material_unresolved") != (decision["status"] == "unresolved"):
+            raise ValueError("Material contradictory evidence must keep the decision open")
 
     record = {
         **decision,
+        "issue_sha256": hashlib.sha256(json.dumps(issue, sort_keys=True,
+                                                  ensure_ascii=False).encode()).hexdigest(),
         "issue_interval": {key: issue[key] for key in ("kind", "start_ms", "end_ms")},
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "working_before_sha256": FILE_HASH(working),
@@ -1170,6 +1236,25 @@ def check():
     print("check ok")
 
 
+def readiness_case(source, directory):
+    """Use the same current decisions as release, before bulk translation too."""
+    if not directory:
+        raise ValueError("Turkish readiness needs its current source-review case")
+    directory = Path(directory).resolve(strict=True)
+    case, working = load_case(directory)
+    if (FILE_HASH(working) != FILE_HASH(source)
+            or FILE_HASH(Path(case["video"])) != case["video_sha256"]):
+        raise ValueError("Readiness case differs from the source")
+    workbench = runpy.run_path(str(SCRIPTS / "subtitle-workbench.py"))
+    queue, pending = workbench["current_queue"](directory)
+    blockers = workbench["source_decision_blockers"](
+        directory, queue, pending, working, case["video_sha256"])
+    if pending or blockers or workbench["unresolved_source_issues"](directory, queue):
+        raise ValueError("Turkish source questions remain open: " +
+                         ", ".join([item["id"] for item in pending] + blockers))
+    return str(directory)
+
+
 def ready_checkpoint(source, decision_path, output):
     """Save the agent's substantive source decision, not an automatic audit pass."""
     decision = json.loads(decision_path.read_text(encoding="utf-8"))
@@ -1183,6 +1268,7 @@ def ready_checkpoint(source, decision_path, output):
             or not decision.get("evidence")):
         raise ValueError("Turkish source work is incomplete or its decision is stale")
     READ_CUES(source)
+    review_case = readiness_case(source, decision.get("case"))
     evidence = []
     for raw in decision["evidence"]:
         path = Path(raw).resolve(strict=True)
@@ -1190,7 +1276,7 @@ def ready_checkpoint(source, decision_path, output):
     if output.exists() or output.resolve() in {source.resolve(), decision_path.resolve()}:
         raise ValueError("Use a new ready checkpoint path")
     output.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint = {**decision, "status": "turkish_ready", "source": str(source.resolve()),
+    checkpoint = {**decision, "case": review_case, "status": "turkish_ready", "source": str(source.resolve()),
                   "source_sha256": source_hash, "evidence": evidence,
                   "decision_sha256": FILE_HASH(decision_path),
                   "note": "Agent source-work checkpoint; not independent accuracy certification."}
@@ -1212,6 +1298,7 @@ def check_ready(source, checkpoint_path):
     for item in checkpoint["evidence"]:
         if FILE_HASH(Path(item["path"])) != item["sha256"]:
             raise ValueError("Turkish-ready evidence changed")
+    readiness_case(source, checkpoint.get("case"))
     return checkpoint
 
 

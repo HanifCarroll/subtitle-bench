@@ -181,11 +181,18 @@ class TranslationUnitTests(unittest.TestCase):
             source, video = root / "tr.srt", root / "video"
             source.write_text("1\n00:00:00,000 --> 00:00:01,000\nMerhaba.\n")
             video.write_bytes(b"video")
+            case = root / "case"
+            case.mkdir()
+            (case / "working.tr.srt").write_bytes(source.read_bytes())
+            (case / "case.json").write_text(json.dumps({
+                "video": str(video), "video_sha256": review["FILE_HASH"](video),
+                "duration_ms": 1000, "language": "tr", "reference": None,
+                "reference_alignment": {"offset_ms": None}, "seam_report": None}))
             with patch.dict(align["align"].__globals__, {"duration_ms": lambda _: 2000}):
                 report = align["align"](video, source, root / "alignment", dry_run=True)
             self.assertEqual(report["windows"], 1)
             decision, checkpoint = root / "decision.json", root / "ready.json"
-            values = {"source_sha256": review["FILE_HASH"](source), "reviewer": "Codex",
+            values = {"case": str(case), "source_sha256": review["FILE_HASH"](source), "reviewer": "Codex",
                       "reason": "Small source interval review complete", "evidence": [str(video)],
                       "remaining_source_work": [], "coverage_assessed": True,
                       "material_defects_repaired": True, "speech_timing_usable": True,

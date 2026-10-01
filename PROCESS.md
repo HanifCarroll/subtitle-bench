@@ -13,6 +13,10 @@ Produce useful Turkish and English subtitles for normal viewing and Turkish lang
 
 ## Choose evidence for the question
 
+Register applicable saved independent receipts in the current source case's `saved_evidence` list (path, SHA-256, model for SRT, and applicable original-video start/end milliseconds). Scene inspection and bundles show those observations alongside the candidate. Saved focused proposals enter the existing source queue; saved words wholly inside subtitle gaps also enter it. Decide explicitly whether a contradiction is a recognition artifact, a supported alternative, or a material unresolved question. A focused rejection needs a named resolution; do not bury it in a list of retained cue IDs. Readiness checks that same case and its current decisions. New evidence invalidates an affected approval even when subtitle bytes are unchanged. These checks enforce review state, not linguistic correctness.
+
+For English wordplay, identify the ordinary meaning and the next speaker's misunderstanding. Preserve both in natural English; a literal pun that removes the instruction is a material error. Do not replace a sound idiomatic draft merely to repeat the source's mistaken word literally.
+
 - Disputed word or reply: focused local recognition with surrounding original audio.
 - Speech activity or boundaries: voice detection plus appropriate audio evidence. Empty recognition or absent VAD does not establish silence.
 - Masking by music: optional separation, retaining the original mix.

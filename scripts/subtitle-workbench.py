@@ -117,10 +117,15 @@ def current_queue(case_directory):
             same_interval and decision["status"] in ("reviewed", "resolved")
             and matching_content
         )
+        if issue.get("evidence"):
+            # New contradictory evidence reopens an unchanged, previously approved line.
+            reviewed_current_version = reviewed_current_version and (
+                decision.get("issue_sha256") == SEMANTIC["fingerprint"](issue))
         interval_key = (issue["kind"], issue["start_ms"], issue["end_ms"])
         interval_record = reviewed_intervals.get(interval_key)
         reviewed_current_version = reviewed_current_version or (
             issue["kind"] in ("subtitle_gap", "possible_speech_gap")
+            and not issue.get("evidence")
             and interval_record is not None and interval_record["status"] == "reviewed"
         )
         record = decision or interval_record
@@ -1010,6 +1015,8 @@ def bundle(args):
     # 2. Put Turkish, English, reference, and saved ASR on the video clock.
 
     timeline = []
+    timeline.extend(SOURCE_REVIEW["saved_scene_evidence"](
+        case_directory, case, timeline_start, timeline_end))
     tracks = [("turkish", source)]
     if target is not None:
         tracks.append(("english", target))
