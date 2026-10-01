@@ -234,6 +234,54 @@ def apply(source, progress, response):
     return record
 
 
+def import_responses(source, progress, response, batch_size=12):
+    """Checkpoint any sized agent-authored set without episode-specific parsing code."""
+    cues, record = current(source, progress, batch_size)
+    authored = json.loads(response.read_text(encoding="utf-8"))
+    rows = authored.get("translations")
+    if (authored.get("source_sha256") != record["source_sha256"]
+            or not isinstance(authored.get("reviewer"), str)
+            or not authored["reviewer"].strip()
+            or not isinstance(rows, list) or not rows):
+        raise ValueError("Import needs current source hash, reviewer, and translations")
+    valid_ids = {cue["id"] for cue in cues}
+    seen = set()
+    for row in rows:
+        if (not isinstance(row, dict) or type(row.get("cue_id")) is not int
+                or row["cue_id"] not in valid_ids or row["cue_id"] in seen):
+            raise ValueError("Import has a duplicate or invalid source cue ID")
+        seen.add(row["cue_id"])
+        translated = isinstance(row.get("text"), str) and bool(row["text"].strip())
+        deferred = isinstance(row.get("defer_reason"), str) and bool(
+            row["defer_reason"].strip())
+        if (translated == deferred
+                or ("text" in row) == ("defer_reason" in row)
+                or set(row) - {"cue_id", "text", "defer_reason"}):
+            raise ValueError("Each import row needs English text or a defer_reason")
+        key = str(row["cue_id"])
+        if translated and key in record["translations"] and (
+                record["translations"][key] != row["text"].strip()):
+            raise ValueError("Changed English needs a source rebase or a reviewed paired edit")
+        if deferred and key in record["translations"]:
+            raise ValueError("Cannot defer an accepted English cue without a source rebase")
+
+    # Commit all rows together after checking the entire input.
+    for row in rows:
+        key = str(row["cue_id"])
+        if "text" in row:
+            record["translations"][key] = row["text"].strip()
+            record["deferred"].pop(key, None)
+        else:
+            record["deferred"][key] = row["defer_reason"].strip()
+    record.setdefault("imports", []).append({
+        "reviewer": authored["reviewer"], "source_sha256": record["source_sha256"],
+        "response_sha256": digest(response), "cue_ids": sorted(seen),
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    })
+    save(progress, record)
+    return record
+
+
 def export(source, progress, output, partial=False):
     record = json.loads(progress.read_text(encoding="utf-8"))
     cues, record = current(source, progress, record["batch_size"])
@@ -261,6 +309,7 @@ def export(source, progress, output, partial=False):
               "deferred": {key: value for key, value in record["deferred"].items()
                            if key in missing},
               "agent_batches": len(record["batches"]),
+              "agent_imports": len(record.get("imports", [])),
               "note": "Agent-authored draft; unresolved source cues are absent from partial export and final release remains blocked."}
     save(output.with_suffix(".agent-translation.json"), report)
     return report
@@ -278,6 +327,11 @@ def main():
     recording.add_argument("source", type=Path)
     recording.add_argument("progress", type=Path)
     recording.add_argument("response", type=Path)
+    importing = actions.add_parser("import", help="save agent-authored cue rows of any size")
+    importing.add_argument("source", type=Path)
+    importing.add_argument("progress", type=Path)
+    importing.add_argument("response", type=Path)
+    importing.add_argument("--batch-size", type=int, default=12)
     exporting = actions.add_parser("export")
     exporting.add_argument("source", type=Path)
     exporting.add_argument("progress", type=Path)
@@ -291,6 +345,12 @@ def main():
     elif args.action == "apply":
         record = apply(args.source, args.progress, args.response)
         print(json.dumps({"translated": len(record["translations"]),
+                          "total": record["cue_count"]}))
+    elif args.action == "import":
+        record = import_responses(args.source, args.progress, args.response,
+                                  args.batch_size)
+        print(json.dumps({"translated": len(record["translations"]),
+                          "deferred": len(record["deferred"]),
                           "total": record["cue_count"]}))
     else:
         print(json.dumps(export(args.source, args.progress, args.output,

@@ -849,7 +849,7 @@ def main():
         replace_function = runpy.run_path(str(TOOL))["replace_pair"]
         replace_args = Namespace(case=reference_case, target=target,
                                  decision=replacement_path)
-        original_copy = __import__("shutil").copy2
+        original_replace = os.replace
         failed_once = False
 
         def fail_target_once(source_path, destination_path):
@@ -858,9 +858,9 @@ def main():
                 failed_once = True
                 raise OSError("synthetic target write failure")
 
-            return original_copy(source_path, destination_path)
+            return original_replace(source_path, destination_path)
 
-        with patch("shutil.copy2", side_effect=fail_target_once):
+        with patch("os.replace", side_effect=fail_target_once):
             try:
                 replace_function(replace_args)
             except OSError as error:

@@ -526,6 +526,16 @@ def record(args):
 def save_pair_revision(case_directory, case, source, target, updated, decision, issue=None):
     """Validate and install two staged SRTs, keeping copies for recovery."""
 
+    def replace_from_snapshot(snapshot, destination):
+        """Replace a file even when the previous candidate is read-only."""
+        with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as staged_file:
+            staged = Path(staged_file.name)
+        try:
+            shutil.copy2(snapshot, staged)
+            os.replace(staged, destination)
+        finally:
+            staged.unlink(missing_ok=True)
+
     # 1. Save both originals and validate both replacements before changing either file.
 
     revision = case_directory / "decisions" / datetime.now(timezone.utc).strftime(
@@ -551,8 +561,8 @@ def save_pair_revision(case_directory, case, source, target, updated, decision, 
     # 2. Apply the pair and record it; restore both originals on any failure.
 
     try:
-        shutil.copy2(revision / "source-after.srt", source)
-        shutil.copy2(revision / "target-after.srt", target)
+        replace_from_snapshot(revision / "source-after.srt", source)
+        replace_from_snapshot(revision / "target-after.srt", target)
 
         record = {
             **decision, "status": "resolved",
@@ -577,7 +587,7 @@ def save_pair_revision(case_directory, case, source, target, updated, decision, 
         restore_errors = []
         for language, path in (("source", source), ("target", target)):
             try:
-                shutil.copy2(revision / f"{language}-before.srt", path)
+                replace_from_snapshot(revision / f"{language}-before.srt", path)
             except Exception as restore_error:
                 restore_errors.append(f"{language}: {restore_error}")
         if restore_errors:

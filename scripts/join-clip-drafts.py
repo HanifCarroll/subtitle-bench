@@ -94,6 +94,12 @@ def intersects(cue, start, end):
     return cue["start_ms"] < end and cue["end_ms"] > start
 
 
+def belongs_to_core(cue, clip):
+    """Choose one owner for a recognition cue seen in overlapping clips."""
+    midpoint = (cue["start_ms"] + cue["end_ms"]) // 2
+    return clip["core_start_ms"] <= midpoint < clip["core_end_ms"]
+
+
 def write_srt(path, cues):
     blocks = [
         f"{number}\n{timestamp(cue['start_ms'])} --> {timestamp(cue['end_ms'])}\n{cue['text']}"
@@ -117,7 +123,7 @@ def extract_review_audio(video, start_ms, end_ms, path):
         raise RuntimeError(f"No audio was extracted at {timestamp(start_ms)}")
 
 
-def join(manifest_path, output_dir, padding_ms):
+def join(manifest_path, output_dir, padding_ms, core_only=False):
     # 1. Validate sources and keep the output separate from every input.
 
     video, language, clips = load_manifest(manifest_path)
@@ -133,7 +139,8 @@ def join(manifest_path, output_dir, padding_ms):
         cue
         for clip, cues in zip(clips, source_cues)
         for cue in cues
-        if intersects(cue, clip["core_start_ms"], clip["core_end_ms"])
+        if (belongs_to_core(cue, clip) if core_only else
+            intersects(cue, clip["core_start_ms"], clip["core_end_ms"]))
     ]
     draft.sort(key=lambda cue: (cue["start_ms"], cue["end_ms"], cue["source"]))
     draft_path = output_dir / f"draft.{language}.srt"
@@ -165,7 +172,8 @@ def join(manifest_path, output_dir, padding_ms):
         "language": language,
         "draft": str(draft_path),
         "draft_cues": len(draft),
-        "note": "The draft may contain duplicate seam transcriptions. Review audio and both versions before editing; this command makes no choice.",
+        "selection": "midpoint_core" if core_only else "intersects_core",
+        "note": "Core selection removes overlap copies, not recognition errors. Review the saved seam audio and both versions before accepting source wording.",
         "clips": [{**clip, "srt": str(clip["srt"]), "srt_sha256": file_hash(clip["srt"])} for clip in clips],
         "seams": seams,
     }
@@ -179,6 +187,10 @@ def check():
     assert intersects(cue, 4_500_000, 4_800_000)
     assert intersects(cue, 4_800_000, 5_100_000)
     assert intersects(cue, 4_800_000, 4_801_000)
+    assert not belongs_to_core(cue, {"core_start_ms": 4_500_000,
+                                     "core_end_ms": 4_800_000})
+    assert belongs_to_core(cue, {"core_start_ms": 4_800_000,
+                                 "core_end_ms": 5_100_000})
     assert timestamp(4_800_000) == "01:20:00,000"
     print("check ok")
 
@@ -188,6 +200,8 @@ def main():
     parser.add_argument("manifest", type=Path, nargs="?")
     parser.add_argument("output", type=Path, nargs="?")
     parser.add_argument("--padding-seconds", type=float, default=6)
+    parser.add_argument("--core-only", action="store_true",
+                        help="select each cue by its midpoint core for an assembly draft")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 
@@ -198,7 +212,8 @@ def main():
     if args.manifest is None or args.output is None or not 1 <= args.padding_seconds <= 30:
         parser.error("provide a manifest, a new output folder, and 1-30 seconds of seam padding")
 
-    join(args.manifest.resolve(strict=True), args.output.resolve(), round(args.padding_seconds * 1000))
+    join(args.manifest.resolve(strict=True), args.output.resolve(),
+         round(args.padding_seconds * 1000), core_only=args.core_only)
 
 
 if __name__ == "__main__":

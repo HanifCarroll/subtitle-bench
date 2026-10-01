@@ -2,10 +2,14 @@
 """Review planned original-video audio clips with Gemini after approval."""
 
 import argparse
+import fcntl
 import hashlib
 import json
+import math
 import re
 import subprocess
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -21,6 +25,16 @@ def save_json(path, value):
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
     temporary.replace(path)
+
+
+def interaction_status(response):
+    """Read the provider's completion status, including SDK enum values."""
+    status = getattr(response, "status", None)
+    if hasattr(response, "model_dump"):
+        raw = response.model_dump(mode="json", exclude_none=True)
+        if isinstance(raw, dict):
+            status = raw.get("status", status)
+    return getattr(status, "value", status)
 
 
 def planned_windows(plan):
@@ -221,19 +235,175 @@ def two_stage_plan(plan):
     return selected, total_ms
 
 
-def two_stage_review(client, plan_path, plan, selected):
+class EpisodeBudget:
+    """Account for every attempted upload and model call across scene plans."""
+
+    def __init__(self, authorization_path, plan, selected, full_episode=False):
+        self.path = Path(authorization_path).resolve(strict=True)
+        self.authorization = json.loads(self.path.read_text(encoding="utf-8"))
+        self.sha256 = file_hash(self.path)
+        self.ledger_path = self.path.parent / "gemini-usage-ledger.json"
+        self.lock_path = self.path.parent / "gemini-usage-ledger.lock"
+        scope = self.authorization.get("scope", {})
+        limits = self.authorization.get("aggregate_hard_limits", {})
+        required = ("attempted_model_calls", "audio_uploads",
+                    "uploaded_audio_seconds_including_repeats",
+                    "processed_audio_seconds_including_repeats", "input_prompt_bytes",
+                    "estimated_charge_usd", "max_clip_seconds",
+                    "max_output_tokens_per_call")
+        if any(type(limits.get(key)) not in (int, float) or limits[key] <= 0
+               for key in required):
+            raise ValueError("Episode authorization needs positive aggregate limits")
+        if full_episode and (type(limits.get("full_episode_audio_seconds")) not in
+                             (int, float) or limits["full_episode_audio_seconds"] <= 0):
+            raise ValueError("Episode authorization needs a full-audio duration limit")
+        video = Path(scope.get("video", ""))
+        if (self.authorization.get("status") != "approved"
+                or not self.authorization.get("approval_source")
+                or scope.get("provider") != "google-gemini"
+                or scope.get("model") != plan["model"]
+                or not video.is_file()
+                or file_hash(video) != scope.get("video_sha256")
+                or any(bundle["video_sha256"] != scope["video_sha256"]
+                       for _, _, bundle, _ in selected)
+                or any((bundle["end_ms"] - bundle["start_ms"]) >
+                       round(limits["full_episode_audio_seconds" if full_episode
+                                    else "max_clip_seconds"] * 1000)
+                       for _, _, bundle, _ in selected)
+                or type(plan.get("max_output_tokens")) is not int
+                or type(limits.get("max_output_tokens_per_call")) is not int
+                or plan["max_output_tokens"] > limits["max_output_tokens_per_call"]):
+            raise ValueError("Episode authorization does not cover this video, model, or output cap")
+        pricing = self.authorization.get("pricing", {})
+        if (pricing.get("source") != "https://ai.google.dev/gemini-api/docs/pricing"
+                or type(pricing.get("input_usd_per_million_tokens")) not in (int, float)
+                or type(pricing.get("output_usd_per_million_tokens")) not in (int, float)
+                or pricing["input_usd_per_million_tokens"] <= 0
+                or pricing["output_usd_per_million_tokens"] <= 0):
+            raise ValueError("Episode authorization needs recorded token pricing")
+        self.limits = limits
+        self.pricing = pricing
+
+    def estimate(self, prompt_bytes, duration_ms, output_tokens):
+        # Conservative pre-call reservation: twice Google's documented 32 audio
+        # tokens/s, one text token/byte, and 1,000 tokens of request overhead.
+        input_tokens = prompt_bytes + 1000 + math.ceil(duration_ms * 64 / 1000)
+        return float((Decimal(input_tokens) * Decimal(str(
+            self.pricing["input_usd_per_million_tokens"]))
+            + Decimal(output_tokens) * Decimal(str(
+                self.pricing["output_usd_per_million_tokens"]))) / 1_000_000)
+
+    def _locked_change(self, event=None, usage_update=None):
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.lock_path.open("a+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            if self.ledger_path.exists():
+                ledger = json.loads(self.ledger_path.read_text(encoding="utf-8"))
+                if ledger.get("authorization_sha256") != self.sha256:
+                    raise ValueError("Episode authorization changed after usage began")
+            else:
+                ledger = {"authorization": str(self.path),
+                          "authorization_sha256": self.sha256, "events": []}
+            if usage_update is not None:
+                event_id, usage = usage_update
+                item = next((value for value in ledger["events"]
+                             if value["id"] == event_id and value["kind"] == "model_call"), None)
+                if item is None:
+                    raise ValueError("Unknown model-call ledger event")
+                item["usage"] = usage
+                if all(isinstance(usage.get(key), int) for key in
+                       ("total_input_tokens", "total_output_tokens", "total_thought_tokens")):
+                    item["estimated_charge_usd"] = float((
+                        Decimal(usage["total_input_tokens"]) * Decimal(str(
+                            self.pricing["input_usd_per_million_tokens"]))
+                        + Decimal(usage["total_output_tokens"]
+                                  + usage["total_thought_tokens"]) * Decimal(str(
+                                      self.pricing["output_usd_per_million_tokens"])))
+                        / 1_000_000)
+                item["usage_recorded_at_utc"] = datetime.now(timezone.utc).isoformat()
+            if event is not None:
+                uploads = [item for item in ledger["events"] if item["kind"] == "upload"]
+                calls = [item for item in ledger["events"] if item["kind"] == "model_call"]
+                upload_ms = sum(item["duration_ms"] for item in uploads)
+                processed_ms = sum(item["duration_ms"] for item in calls)
+                prompt_bytes = sum(item["prompt_bytes"] for item in calls)
+                cost = sum(Decimal(str(item["estimated_charge_usd"])) for item in calls)
+                next_uploads = len(uploads) + (event["kind"] == "upload")
+                next_calls = len(calls) + (event["kind"] == "model_call")
+                next_upload_ms = upload_ms + (event["duration_ms"] if event["kind"] == "upload" else 0)
+                next_processed_ms = processed_ms + (event["duration_ms"] if event["kind"] == "model_call" else 0)
+                next_prompt_bytes = prompt_bytes + event.get("prompt_bytes", 0)
+                next_cost = cost + Decimal(str(event.get("estimated_charge_usd", 0)))
+                full_uploads = sum(item["kind"] == "upload" and
+                                   item.get("label") == "full-episode"
+                                   for item in ledger["events"])
+                full_calls = sum(item["kind"] == "model_call" and
+                                 item.get("stage") == "full_episode_observation"
+                                 for item in ledger["events"])
+                if (next_uploads > self.limits["audio_uploads"]
+                        or next_calls > self.limits["attempted_model_calls"]
+                        or next_upload_ms > round(
+                            self.limits["uploaded_audio_seconds_including_repeats"] * 1000)
+                        or next_processed_ms > round(
+                            self.limits["processed_audio_seconds_including_repeats"] * 1000)
+                        or next_prompt_bytes > self.limits["input_prompt_bytes"]
+                        or (event["kind"] == "upload" and
+                            event.get("label") == "full-episode" and full_uploads >= 1)
+                        or (event["kind"] == "model_call" and
+                            event.get("stage") == "full_episode_observation" and
+                            full_calls >= 1)
+                        or next_cost > Decimal(str(self.limits["estimated_charge_usd"]))):
+                    raise ValueError("Episode Gemini aggregate limit reached; no provider request made")
+                event["id"] = len(ledger["events"]) + 1
+                event["reserved_at_utc"] = datetime.now(timezone.utc).isoformat()
+                ledger["events"].append(event)
+            save_json(self.ledger_path, ledger)
+            return event["id"] if event is not None else None
+
+    def reserve_upload(self, plan_path, label, bundle_path, audio, duration_ms):
+        return self._locked_change({
+            "kind": "upload", "plan": str(plan_path),
+            "plan_sha256": file_hash(plan_path), "label": label,
+            "bundle_sha256": file_hash(bundle_path), "clip_sha256": file_hash(audio),
+            "duration_ms": duration_ms})
+
+    def reserve_call(self, plan_path, label, bundle_path, audio, duration_ms,
+                     stage, prompt_bytes, max_output_tokens):
+        return self._locked_change({
+            "kind": "model_call", "plan": str(plan_path),
+            "plan_sha256": file_hash(plan_path), "label": label,
+            "bundle_sha256": file_hash(bundle_path), "clip_sha256": file_hash(audio),
+            "duration_ms": duration_ms, "stage": stage,
+            "prompt_bytes": prompt_bytes,
+            "max_output_tokens": max_output_tokens,
+            "estimated_charge_usd": self.estimate(
+                prompt_bytes, duration_ms, max_output_tokens)})
+
+    def record_usage(self, event_id, usage):
+        if isinstance(usage, dict):
+            self._locked_change(usage_update=(event_id, usage))
+
+
+def two_stage_review(client, plan_path, plan, selected, budget=None):
     """Observe original audio first, then compare it with saved candidates."""
     output = plan_path.parent / "gemini-two-stage"
     output.mkdir(exist_ok=True)
     for label, bundle_path, bundle, audio in selected:
+        duration_ms = bundle["end_ms"] - bundle["start_ms"]
         receipt = output / f"{label}.json"
         if receipt.exists():
             saved = json.loads(receipt.read_text(encoding="utf-8"))
+            if budget is not None and (saved.get("authorization_sha256") != budget.sha256
+                                       or saved.get("usage_ledger") != str(budget.ledger_path)):
+                raise ValueError(f"Review receipt at {label} belongs to another authorization")
             if (saved.get("status") == "complete"
                     and saved.get("clip_sha256") == file_hash(audio)
+                    and saved.get("independent_provider_status") == "completed"
+                    and saved.get("comparison_provider_status") == "completed"
                     and saved.get("provider_file_deleted") is True):
                 continue
-            if (saved.get("status") != "independent_response_saved"
+            if (saved.get("status") not in (
+                    "independent_response_saved", "independent_complete")
                     or saved.get("provider_file_deleted") is not True
                     or saved.get("model_calls_attempted") != 1
                     or saved.get("clip_sha256") != file_hash(audio)
@@ -270,6 +440,13 @@ def two_stage_review(client, plan_path, plan, selected):
                     if "max_output_tokens" in plan else "provider_default")},
             }
             stages = ("independent", "comparison")
+        if budget is not None:
+            record["authorization"] = str(budget.path)
+            record["authorization_sha256"] = budget.sha256
+            record["usage_ledger"] = str(budget.ledger_path)
+            event_id = budget.reserve_upload(
+                plan_path, label, bundle_path, audio, duration_ms)
+            record.setdefault("ledger_upload_event_ids", []).append(event_id)
         record["provider_file_deleted"] = False
         record["status"] = "uploading"
         save_json(receipt, record)
@@ -292,6 +469,12 @@ def two_stage_review(client, plan_path, plan, selected):
                 record[f"{stage}_prompt"] = str(prompt_path)
                 record[f"{stage}_prompt_sha256"] = file_hash(prompt_path)
                 record[f"{stage}_prompt_bytes"] = len(prompt.encode("utf-8"))
+                if budget is not None:
+                    event_id = budget.reserve_call(
+                        plan_path, label, bundle_path, audio, duration_ms,
+                        stage, record[f"{stage}_prompt_bytes"],
+                        plan["max_output_tokens"])
+                    record.setdefault("ledger_model_call_event_ids", {})[stage] = event_id
                 record["model_calls_attempted"] = record.get("model_calls_attempted", 0) + 1
                 record["status"] = f"{stage}_requesting"
                 save_json(receipt, record)
@@ -308,14 +491,22 @@ def two_stage_review(client, plan_path, plan, selected):
                 record[f"{stage}_raw_sha256"] = file_hash(raw_path)
                 record[f"{stage}_response_id"] = response.id
                 record[f"{stage}_output"] = response.output_text
+                record[f"{stage}_provider_status"] = interaction_status(response)
                 usage = getattr(response, "usage", None)
                 if hasattr(usage, "model_dump"):
                     record[f"{stage}_usage"] = usage.model_dump(
                         mode="json", exclude_none=True)
                 elif isinstance(usage, dict):
                     record[f"{stage}_usage"] = usage
+                if budget is not None:
+                    budget.record_usage(event_id, record.get(f"{stage}_usage"))
                 record["status"] = f"{stage}_response_saved"
                 save_json(receipt, record)
+                if record[f"{stage}_provider_status"] != "completed":
+                    record["status"] = f"{stage}_provider_incomplete"
+                    save_json(receipt, record)
+                    raise ValueError(
+                        f"Gemini provider did not complete {stage} for {label}")
                 if response.output_text:
                     record[f"{stage}_parsed"] = parsed_response(response.output_text)
                 record["status"] = f"{stage}_complete"
@@ -352,8 +543,11 @@ def main():
     plan = json.loads(args.plan.read_text())
     if plan.get("kind") == "two_stage_audio_review":
         selected, total_ms = two_stage_plan(plan)
+        budget = (EpisodeBudget(plan["authorization"], plan, selected)
+                  if "authorization" in plan else None)
         print(json.dumps({"calls": len(selected) * 2,
                           "audio_seconds": round(total_ms / 1000, 3),
+                          "authorization_valid": budget is not None,
                           "apply": args.apply}))
         if args.parse_saved:
             if args.apply:
@@ -364,13 +558,15 @@ def main():
             print(json.dumps({"parsed_receipts": len(selected)}))
             return
         if args.apply:
+            if budget is None:
+                raise ValueError("Two-stage provider calls require an episode authorization file")
             from google import genai
             from google.genai import types
             # The SDK otherwise retries model calls after transient errors.
             # One attempt per request keeps the planned call count exact.
             client = genai.Client(http_options=types.HttpOptions(
                 retry_options=types.HttpRetryOptions(attempts=1)))
-            two_stage_review(client, args.plan, plan, selected)
+            two_stage_review(client, args.plan, plan, selected, budget)
         return
 
     video = Path(plan["video"]).resolve(strict=True)

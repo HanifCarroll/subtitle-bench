@@ -15,6 +15,58 @@ READ_CUES = runpy.run_path(str(SCRIPTS / "subtitle-timing.py"))["read_cues"]
 
 
 class AgentTranslateTest(unittest.TestCase):
+    def test_import_resumes_without_episode_specific_assembly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.tr.srt"
+            progress = root / "progress.json"
+            WRITE_SRT(source, [
+                {"start_ms": 0, "end_ms": 900, "text": "Merhaba."},
+                {"start_ms": 1000, "end_ms": 1900, "text": "Ne dedi?"},
+                {"start_ms": 2000, "end_ms": 2900, "text": "Güle güle."},
+            ])
+            _, current = TRANSLATE["current"](source, progress, 12)
+            first = root / "first.json"
+            first.write_text(json.dumps({
+                "source_sha256": current["source_sha256"], "reviewer": "agent",
+                "translations": [
+                    {"cue_id": 1, "text": "Hello."},
+                    {"cue_id": 2, "defer_reason": "Source wording under review"},
+                ],
+            }), encoding="utf-8")
+            TRANSLATE["import_responses"](source, progress, first)
+            partial = root / "view.partial.en.srt"
+            self.assertEqual(TRANSLATE["export"](source, progress, partial, True)[
+                "untranslated_source_ids"], [2, 3])
+            second = root / "second.json"
+            second.write_text(json.dumps({
+                "source_sha256": current["source_sha256"], "reviewer": "agent",
+                "translations": [
+                    {"cue_id": 2, "text": "What did he say?"},
+                    {"cue_id": 3, "text": "Goodbye."},
+                ],
+            }), encoding="utf-8")
+            TRANSLATE["import_responses"](source, progress, second)
+            final = root / "final.en.srt"
+            self.assertEqual(TRANSLATE["export"](source, progress, final)[
+                "status"], "complete_draft")
+            self.assertEqual([cue["text"] for cue in READ_CUES(final)],
+                             ["Hello.", "What did he say?", "Goodbye."])
+            stale = root / "stale.json"
+            stale.write_text(json.dumps({
+                "source_sha256": "0" * 64, "reviewer": "agent",
+                "translations": [{"cue_id": 1, "text": "Incorrect overwrite"}],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "current source hash"):
+                TRANSLATE["import_responses"](source, progress, stale)
+            invalid = root / "invalid.json"
+            invalid.write_text(json.dumps({
+                "source_sha256": current["source_sha256"], "reviewer": "agent",
+                "translations": [{"cue_id": 1, "text": "", "defer_reason": "oops"}],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "English text or a defer_reason"):
+                TRANSLATE["import_responses"](source, progress, invalid)
+
     def test_checkpoint_export_and_source_change(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
