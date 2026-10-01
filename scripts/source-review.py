@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import runpy
@@ -683,6 +684,84 @@ def evidence_blockers(directory, paths, start_ms, end_ms, video_sha256):
     return ["Evidence clips do not cover the disputed interval"]
 
 
+def saved_asr_blockers(directory, result, start_ms, end_ms, video_sha256):
+    """Reuse complete hosted recognition receipts with a separate agent judgment."""
+    assessment = result.get("agent_assessment", {})
+    observations = result.get("observations")
+    if (not isinstance(assessment, dict)
+            or any(not isinstance(assessment.get(key), str)
+                   or not assessment[key].strip() for key in ("reviewer", "reason"))
+            or assessment.get("heard_original_audio") is not False
+            or not isinstance(observations, list) or len(observations) < 2):
+        return ["Saved ASR review needs traceable observations and an honest agent judgment"]
+
+    # 1. Validate original receipts, their media, and their recorded coverage.
+    intervals, receipts, whole_audio = defaultdict(list), set(), {}
+    for observation in observations:
+        if not isinstance(observation, dict) or observation.get("method") != "hosted_asr":
+            return ["Saved ASR observation must retain its hosted authorship"]
+        path = observation.get("raw_response")
+        if not isinstance(path, str) or not (directory / path).is_file():
+            return ["Saved ASR receipt is missing"]
+        raw_path = directory / path
+        if FILE_HASH(raw_path) != observation.get("raw_response_sha256"):
+            return ["Saved ASR receipt is stale"]
+        try:
+            raw = json.loads(raw_path.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeError):
+            return ["Saved ASR receipt is malformed"]
+        if (not isinstance(raw, dict) or raw.get("status") != "complete"
+                or raw.get("video_sha256") != video_sha256
+                or not isinstance(raw.get("model"), str) or not raw["model"].strip()
+                or raw["model"] != observation.get("model")):
+            return ["Saved ASR receipt is incomplete or belongs to another video/model"]
+        audio = observation.get("audio_path")
+        if (not isinstance(audio, str) or not (directory / audio).is_file()
+                or FILE_HASH(directory / audio) != raw.get("audio_sha256")):
+            return ["Saved ASR input audio is missing or stale"]
+        clip = raw.get("clip")
+        if isinstance(clip, dict):
+            first, last = clip.get("core_start_ms"), clip.get("core_end_ms")
+        elif (type(raw.get("audio_seconds")) in (int, float)
+              and math.isfinite(raw["audio_seconds"])):
+            first, last = 0, round(raw["audio_seconds"] * 1000)
+            whole_audio[raw["model"]] = (last, directory / audio)
+        else:
+            return ["Saved ASR receipt has no recorded interval"]
+        if type(first) is not int or type(last) is not int or not 0 <= first < last:
+            return ["Saved ASR interval is malformed"]
+        intervals[raw["model"]].append((first, last))
+        receipts.add(str(raw_path.resolve()))
+    if len(intervals) < 2 or len(receipts) < 2:
+        return ["Saved ASR review needs distinct models and receipts"]
+
+    # 2. Each existing recognizer must cover the question; no consensus required.
+    for model, spans in intervals.items():
+        cursor = start_ms
+        for first, last in sorted(spans):
+            if first > cursor:
+                break
+            cursor = max(cursor, last)
+        if cursor < end_ms:
+            # Only tolerate physical audio padding at the verified container end.
+            if whole_audio.get(model, (None,))[0] != cursor:
+                return ["Saved ASR receipts do not cover the disputed interval"]
+            original_video = result.get("original_video")
+            if not isinstance(original_video, str):
+                return ["Saved ASR receipts do not cover the disputed interval"]
+            media = directory / original_video
+            if (not media.is_file() or FILE_HASH(media) != video_sha256
+                    or not 0 < end_ms - cursor <= 50):
+                return ["Saved ASR receipts do not cover the disputed interval"]
+            durations = [round(float(subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+            ], text=True)) * 1000) for path in (whole_audio[model][1], media)]
+            if durations != [cursor, end_ms]:
+                return ["Saved ASR receipts do not cover the disputed interval"]
+    return []
+
+
 def review_result_blockers(directory, path, start_ms, end_ms, video_sha256,
                            source_sha256, source_interval_sha256=None):
     """Require traceable audio evidence bound to the current source interval."""
@@ -707,6 +786,9 @@ def review_result_blockers(directory, path, start_ms, end_ms, video_sha256,
             or result["start_ms"] > start_ms or result["end_ms"] < end_ms
             or result.get("status") not in ("supported", "corrected", "model_artifact")):
         return ["Audio review result is stale, incomplete, or uncertain"]
+
+    if result.get("route") == "saved_asr_agent":
+        return saved_asr_blockers(directory, result, start_ms, end_ms, video_sha256)
 
     # Local recognition plus an agent's explicit comparison can close an issue
     # without claiming that an audio-capable provider or human heard the clip.

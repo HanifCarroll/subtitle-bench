@@ -1611,6 +1611,40 @@ def rendering_blockers(report_path, video, source, target, case_directory,
     return []
 
 
+def translation_decision_blockers(report, manifest, decisions_path):
+    """Accept reviewed display grouping; preserve all other timing findings."""
+    flags = report["flags"]
+    if not flags:
+        return []
+    if not decisions_path or not decisions_path.is_file() or not manifest:
+        return [f"{len(flags)} English timing questions need repair"]
+    # 1. Bind authored judgments to the current pair and meaning map.
+    try:
+        decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
+        valid = (decisions["source_sha256"] == report["source_sha256"]
+                 and decisions["target_sha256"] == report["target_sha256"]
+                 and decisions["semantic_manifest_sha256"] == file_hash(manifest)
+                 and isinstance(decisions["reviewer"], str)
+                 and bool(decisions["reviewer"].strip()))
+        reviews = {entry["id"]: entry for entry in decisions["findings"]}
+        valid = valid and len(reviews) == len(decisions["findings"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return ["English grouping decisions are malformed"]
+    if not valid:
+        return ["English grouping decisions are stale or incomplete"]
+    # 2. Accept only specifically reviewed grouping; other findings stay open.
+    pending = []
+    for flag in flags:
+        entry = reviews.get(flag["id"], {})
+        if (flag["kind"] != "many_source_cues_one_target"
+                or entry.get("finding_sha256") != SEMANTIC["fingerprint"](flag)
+                or entry.get("disposition") != "independent_display_grouping"
+                or not isinstance(entry.get("reason"), str)
+                or not entry["reason"].strip()):
+            pending.append(flag["id"])
+    return [f"English timing questions need decisions: {', '.join(pending)}"] if pending else []
+
+
 def release(args):
     # 1. Check candidate files, current audit evidence, and the original video.
 
@@ -1633,6 +1667,7 @@ def release(args):
     layout_report = getattr(args, "layout_report", None)
     timing_decisions = getattr(args, "timing_decisions", None)
     render_report = getattr(args, "render_report", None)
+    translation_decisions = getattr(args, "translation_decisions", None)
     destinations = [video.with_suffix(f".{args.source_language}.srt"),
                     video.with_suffix(f".{args.target_language}.srt")]
     protected_paths = {video, source, target}
@@ -1643,7 +1678,7 @@ def release(args):
     ))
     if semantic_manifest:
         protected_paths.add(semantic_manifest.resolve())
-    for path in (layout_report, timing_decisions, render_report):
+    for path in (layout_report, timing_decisions, render_report, translation_decisions):
         if path:
             protected_paths.add(path.resolve())
     if (source == target or destinations[0] == destinations[1] or
@@ -1713,8 +1748,10 @@ def release(args):
     unresolved = unresolved_source_issues(case_directory, queue)
     if unresolved:
         blockers.append(f"{len(unresolved)} known speech questions need a subtitle decision")
-    if translation["flags"]:
-        blockers.append(f"{len(translation['flags'])} English timing questions need repair")
+    grouping_blockers = translation_decision_blockers(
+        translation, semantic_manifest, translation_decisions
+    )
+    blockers.extend(grouping_blockers)
     coverage_hash = case_directory / "speech-coverage.sha256"
     if not coverage_hash.is_file() or coverage_hash.read_text().strip() != file_hash(working):
         blockers.append("Speech coverage scan is missing or stale")
@@ -1727,6 +1764,7 @@ def release(args):
         "source_cues": len(source_cues), "target_cues": len(target_cues),
         "playback_samples": playback_samples(source_cues, target_cues),
         "pending_source_issues": len(pending), "translation_flags": len(translation["flags"]),
+        "translation_decision_blockers": grouping_blockers,
         "urgent_source_issue_ids": [item["id"] for item in urgent],
         "open_coverage_issue_ids": open_coverage,
         "unresolved_source_issue_ids": unresolved,
@@ -1951,6 +1989,7 @@ def main():
     releasing.add_argument("--target-language", required=True)
     releasing.add_argument("--case", type=Path, required=True)
     releasing.add_argument("--translation-report", type=Path, required=True)
+    releasing.add_argument("--translation-decisions", type=Path)
     releasing.add_argument("--audio-report", type=Path, required=True)
     releasing.add_argument("--audio-decisions", type=Path, required=True)
     releasing.add_argument("--semantic-manifest", type=Path)

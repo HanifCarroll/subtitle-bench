@@ -1,6 +1,8 @@
 # E023 source-first production run — 1 October 2026
 
-Both full subtitle exports are complete and usable as candidates for the 82m 29.621s episode: Turkish with 1,307 display cues and English with 1,248 display cues. All 1,258 settled source units have reviewed English. The final stage is **partially verified**: exports and sampled libass renders passed, but representative native playback is blocked by the capture service. No installation was performed.
+**Historical production checkpoint; completion assessment superseded.** The run saved full-episode Turkish and English exports (1,307/1,248 display cues), 1,258 source-linked English reviews and passing sampled renders. The later [finalization and exact-pair reference comparison](E023-FINALIZATION-2026-10-01.md) connected saved decisions to the gate and exposed four source questions plus an English idiom problem. The current content decision is **held**, and native playback remains separately unverified. No installation was performed.
+
+The sections below preserve the earlier run's measured work and assessment; they do not override that current decision.
 
 ## Actual stage times
 
@@ -39,7 +41,7 @@ Native IINA inspection reached the private review video and external subtitle ch
 - 57:58.100–58:00.500: music masks a brief reply. Independent hosted recognition also marked it unintelligible; the plausible alternatives were not strong enough to write as fact. Both tracks use an honest caption.
 - 42 Turkish display cues (3.2%) and 53 English cues (4.2%) exceed 25 characters/s; 12 and 14 respectively exceed 30. Faithful rapid speech was retained. Some lines therefore require fast reading.
 - Supported wording alternatives remain in noisy/comedic passages. The agent did not directly hear original audio. Recognition, alignment and scene observations support decisions but do not certify every spoken word. There was no full-episode watch-through.
-- Native playback and the formal installation gate remain unverified/held as described above. Ordinary Turkish dialogue and English coverage are not pending.
+- Native playback and the formal installation gate remain unverified/held as described above. Ordinary Turkish dialogue was assessed as complete at this checkpoint; the later finalization reopened specific passages.
 
 ## Provider use and preservation
 

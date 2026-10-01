@@ -1,0 +1,85 @@
+# E023 finalization and frozen-pair reference comparison — 1 October 2026
+
+**Current decision: full-episode exports exist, but content acceptance is held.** The earlier production report overstated content completeness. The receipt-format mismatch is resolved: saved evidence now reaches the release check, which holds four specific source questions rather than 62 unconnected warnings. The comparison also identifies an English idiom problem and several unsettled differences. Native IINA playback remains separately unverified. No subtitles were regenerated, corrected from references, or installed.
+
+This is the current outcome for the same frozen 1,307-cue Turkish and 1,248-cue English files. It supersedes the completion assessment in the [production checkpoint](E023-SOURCE-FIRST-PRODUCTION-2026-10-01.md), while preserving that run's measured stages and artifacts.
+
+## Release reconciliation
+
+| Earlier category | Finding after checking the current files and saved evidence | Current treatment |
+|---|---|---|
+| Missing audio decisions | All 17 scan questions have saved evidence: intentional vocal repetition, boundary effects, previously adjudicated wording, or instrumental intervals. Empty ASR alone was not used to prove silence. | Recorded current interval/finding hashes and agent judgments; audio-decision blocker removed. |
+| 62 source items | 18 VAD misses contain supported speech/vocalizations; 21 VAD gap questions have matching saved assessments; 22 of 23 long gaps have supported non-dialogue/transition decisions. One long gap contains a possible omitted plea. | 61 decisions connected; the plea stays unresolved. These were mostly supported decisions in another format, rather than stale subtitle defects. |
+| Seven severe mechanical flags | All seven are long subtitle gaps. Each was checked independently; the findings below describe the actual evidence and limitations. | No severe mechanical flag remains undecided on the independent evidence. Later reference-only short calls remain explicitly unsettled. |
+| Seven English grouping warnings | Turkish and English split the same reviewed meanings differently. Neighboring English carries each linked action/question; some clauses begin in the preceding cue or finish in the following one. | All seven retained in the raw audit, with current pair/map/finding hashes and specific grouping decisions. Other timing kinds still block. |
+| Newly exposed source conflicts | Saved independent evidence conflicts with the bathroom reply, police/bird call, and shock reaction. | Three questions added through the existing evidence-disagreement queue; none automatically cleared. |
+
+The latest dry release reports **four pending and four known unresolved source questions**, one of which is a coverage gap. There are no audio-decision or grouping blockers and no urgent mechanical source flags. These counters describe the same four passages, not nine separate defects. The check remains blocked.
+
+The small reusable change accepts complete saved hosted-recognition receipts with their actual provider authorship, input-audio hashes, video identity, and interval coverage, plus an explicit agent judgment. It does not impersonate a fresh independent/comparison provider review. A separate optional grouping-decision input binds judgments to the current semantic map and exact warnings. Neither route bypasses source, audio, semantic, timing, structural, or rendering checks; neither makes a provider request.
+
+### The seven severe gaps
+
+| Video interval | Saved evidence and decision |
+|---|---|
+| 00:00–01:48.590 | Native recognition records opening music through 108.52s; original Gemini begins dialogue near 108.3s. The first short vocal boundary is already retained. Isolated Whisper's repeated closing text is unsupported. |
+| 14:36.980–15:15.860 | Native music event spans 876.33–916.01s. No omitted ordinary sentence is substantiated in the independent drafts. |
+| 61:08.677–61:58.660 | Impact/fight activity spans most of the interval, followed by shouting and the retained question at 3718.66s. No intervening ordinary sentence is supported. |
+| 63:55.750–64:42.060 | Native music spans 3835.33–3882.17s; the next spoken line is retained. The English reference adds encouragement while Turkish records overlapping voices. That short reference difference remains unsettled, not an established candidate omission or reference error. |
+| 69:35.430–70:08.316 | Native lively music spans 4174.17–4208.41s; dialogue resumes at the supported boundary. References contain a short call around 69:55–69:57, with differing English/Turkish wording. Existing recognition does not settle it. |
+| 80:42.495–81:13.343 | Saved focused review marks impact/music before the father's question. Original Gemini times that question around 4873–4879s; isolated Whisper's earlier repeated question is not a second utterance. |
+| 81:18.380–82:29.621 | Whole Scribe places residual syllables of the already retained father's question at the container end. Complete final Gemini and focused final-scene evidence support the earlier question, with no substantiated later sentence. This is a supported timing artifact/credits decision, **not** a claim of directly heard silence. |
+
+The agent did not directly hear original audio. Saved audio observations, current text, alignment, and existing scene evidence support these decisions; recognizer agreement is not proof. The remaining reference calls do not justify rerunning every scene.
+
+## Comparison of the exact frozen pair
+
+Reference inputs were Turkish OpenSubtitles file **9950995** and English file **8658862**, normalized into private UTF-8 copies. Reused the saved cut alignment of **4.458 seconds subtracted from both references**, after verifying the same inputs and checking the final pair. The current Turkish file supplies 231 matching whole cues across the episode; their regional start offsets are stable, with roughly 0.15–0.20s of display-boundary difference after the shift. Twelve matching English cues provide an independent clock check. No material cut drift was found.
+
+The reference copies contain 1,758 Turkish and 1,344 English cues. Cue counts are not completeness or accuracy measures: Turkish includes speaker/event captions, and both references group dialogue differently. Whole-file coverage/timing inspection was followed by review of wording disagreements and ordinary early, middle, and late passages. Similarity served only to select inspection; no disagreement percentage is reported as accuracy. This is an agent comparison, not a new full watch-through or independent linguistic certification.
+
+Opening title cards, Turkish event captions, and the reference's subtitle-author credit were separated from spoken coverage. Both candidates and references reach the final father scene on the same clock. There is no evidence of an entire missing opening or tail. The important missing passage is within the episode.
+
+### Remaining candidate problems
+
+| Interval | Assessment |
+|---|---|
+| **25:00.6–25:09.2** | Both references contain a longer plea about being unable to bear the situation and asking the father for help. The frozen pair omits it. Saved native recognition independently detects words around 25:02.6–25:05.9, although it garbles them; isolated Whisper also detects a short word. This is a substantive source-coverage problem, not an empty VAD warning. Exact correction still needs a focused original-audio decision; reference wording has not been adopted. |
+| **50:35–50:39** | The candidate gives bathroom directions where both references give gratitude; saved native Scribe also recognizes a thank-you. The reply's function changes. Reopened as a source conflict. |
+| **66:15.5–66:24** | The candidate asserts that the speaker is a plainclothes policeman. Saved focused comparison explicitly rejects that wording, and its independent stage gives another uncertain phrase. The repeated bird/name call also differs between saved recognizers and references. The occupation claim is unsupported; the precise shout remains unsettled. Reopened as a source conflict. |
+| **71:30–71:38** | The candidate calls someone handsome; both references instead contain shock/speechlessness, and native Scribe independently recognizes shock. This changes the reaction and may omit the short responding turn. Reopened as a source conflict. |
+| **36:51–37:04** | English carries the snoring joke but renders the initial appearance-based judgment literally as snoring at things. It loses the natural first meaning that sets up the joke. This is an English idiom/readability repair for a separate version; Turkish need not change merely to fix it. |
+
+There is no settled whole-episode clock defect. A small prior-word tail near **27:15** varies by a few tenths of a second between saved recognizers and current alignment; it remains a minor boundary uncertainty. Fast speech still requires fast reading: 42 Turkish and 53 English cues exceed 25 characters/s, including 12 and 14 above 30. The exports remain ordered, within duration, nonoverlapping, and limited to two lines/42 characters per line.
+
+### Improvements, reference defects, and equivalent English
+
+- The final English preserves vocal drumming around **26:02–26:08**, which the English reference omits. Turkish reference and saved recognition support the vocal rhythm.
+- The final father's question around **81:13–81:19** addresses Erdal and asks whether the person who fell is the speaker's son. The English reference confuses the addressee with the person who fell; its Turkish counterpart supports the candidate's interpretation.
+- The threat around **04:30–04:43** retains moving the mouth to the back of the neck. The English reference changes that into pulling out the tongue; the Turkish reference supports the candidate's concrete image. The candidate's English about damaging the eyes is still awkward.
+- The sofa-bed/safe instructions around **42:09–42:29** use lifting/opening and preserve the quilt/safe relation. The English reference's repeated pulling language is less clear. Neither different cue counts nor synonymous quilt/blanket wording establishes an error.
+- Ordinary passages about the children and wager (**21:42–21:55**), telephone/envelope instructions (**30:00–30:17**), feeding the captives (**34:00–34:11**), the distinction between the two men's situations (**67:48–68:08**), and the father's lack of knowledge (**79:10–79:27**) preserve the same propositions with different phrasing or grouping. Those differences were accepted.
+
+### Unsettled differences kept separate
+
+The hostage-idea line near **45:32** differs between a fixation accusation and attribution of the idea; saved recognition is also garbled. The fight gesture near **59:41–59:53** differs in invitation/negation despite prior focused adjudication. The card-game response near **38:51**, wrist/numbness wording near **76:06**, and a courtesy phrase near **58:22** also differ without sufficient independent support for an exact correction. Some brief background calls/interjections occur only in references. They are not silently counted as candidate defects or declared reference hallucinations.
+
+Both honest indistinct-speech captions remain unchanged, around **30:28–30:29** and **57:58–58:00**. The references offer specific readings, but the saved independent evidence remains conflicting or masked. Reference text does not retroactively settle those words.
+
+## Practical outcome and preservation
+
+The mismatch is resolved into a consistent **held** decision, not an artificial pass. The current strategy can be applied to a user-selected viewing episode with agent-owned review and the repaired evidence path; this run does **not** establish reliably watch-ready or unattended output. The four source passages and the English idiom must be addressed before calling E023 accepted. Any reference-assisted repair belongs in a separately named version with affected timing/English rechecked; the independent pair must remain intact. No next episode was launched.
+
+Native IINA playback remains **unverified** because the capture service is unavailable. There were no capture retries or resets in this finalization. The previous 26 successful exports/render samples and their evidence remain intact. Capture failure is separate from the content hold. No sidecar installation is authorized or performed, and Hanif is not assigned another evaluation session.
+
+No new provider calls, uploads, transcription, translation generation, rendering, or model comparison were performed. All 17 portable checks passed, including stale-media/receipt, partial-coverage, verified-container-tail and unknown-timing-kind rejection checks. The initial production stage times remain **73m 21.8s source**, **19.2s English generation/checkpoint**, **4m 24.1s English review**, and **32m 0.2s final layout/checks/reporting**, totaling **110m 5.3s** at that earlier checkpoint. Those times exclude this later finalization; no unsupported combined wall-time total is claimed.
+
+Both independent SRT hashes, the meaning map, Turkish-ready snapshot, nine historical comparison artifacts, original production report, rendered evidence, and installed sidecars were rechecked unchanged. The historical Turkish-ready assessment is now superseded for content acceptance, rather than silently rewritten.
+
+| Frozen artifact | SHA-256 |
+|---|---|
+| Turkish final | `5e3f1dd884c65f9ae6abc9684b191e92da1848bd61d68e78e45fd4d88df1bfc6` |
+| English final | `ec2aed61e9483e71370c80a9a5a339875ad0d398e458f4574a3de12178b3fc1b` |
+| Meaning map | `d2d46edb3dd3522e09dd9c3b7d44645a18e8efcb21e2eeb1027e95a65e7c0291` |
+
+Detailed decisions, raw evidence, reference copies, exact cue differences, coverage inventory, alignment checks and current release report are in the private run's `finalization-2026-10-01` folder. This publication contains assessments and identifiers, not subtitle tracks, model output, reference excerpts, or media.
