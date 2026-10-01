@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import re
 import runpy
 import shutil
 import subprocess
@@ -12,7 +13,9 @@ from pathlib import Path
 
 
 SCRIPTS = Path(__file__).resolve().parent
-READ_CUES = runpy.run_path(str(SCRIPTS / "subtitle-timing.py"))["read_cues"]
+TIMING = runpy.run_path(str(SCRIPTS / "subtitle-timing.py"))
+READ_CUES = TIMING["read_cues"]
+JOIN = runpy.run_path(str(SCRIPTS / "join-clip-drafts.py"))
 
 
 def file_hash(path):
@@ -92,10 +95,23 @@ def run_clip(clip, index, output, video, language, model, vad_model, ffmpeg, whi
 
     if not srt.exists():
         srt.write_text("", encoding="utf-8")
+    timing_fixes = []
+    if srt.stat().st_size:
+        text = srt.read_text(encoding="utf-8-sig")
+        for match in list(re.finditer(r"^(\d\d:\d\d:\d\d,\d{3}) --> (\d\d:\d\d:\d\d,\d{3})$", text, re.M)):
+            start, end = TIMING["milliseconds"](match[1]), TIMING["milliseconds"](match[2])
+            if end <= start:
+                if not timing_fixes:
+                    shutil.copy2(srt, prefix.with_suffix(".raw.srt"))
+                timing_fixes.append({"start_ms": start, "raw_end_ms": end, "end_ms": start + 1})
+                text = text.replace(match[0], match[1] + " --> " + JOIN["timestamp"](start + 1), 1)
+        if timing_fixes:
+            srt.write_text(text, encoding="utf-8")
     checked_srt(srt)
     receipt.write_text(json.dumps({
         "index": index, "clip": clip, "srt_sha256": file_hash(srt),
-        "empty_transcript": srt.stat().st_size == 0,
+        "empty_transcript": srt.stat().st_size == 0, "provisional_timing_fixes": timing_fixes,
+        "raw_srt_sha256": file_hash(prefix.with_suffix(".raw.srt")) if timing_fixes else None,
     }, indent=2) + "\n", encoding="utf-8")
     wav.unlink()
     return srt
@@ -120,6 +136,8 @@ def prepare_run(args):
     duration_ms = video_duration(ffprobe, video)
     run = {
         "video": str(video), "video_sha256": file_hash(video),
+        "profile": getattr(args, "profile", None) or "custom-whisper",
+        "process_isolation": "one whisper-cli process per clip",
         "duration_ms": duration_ms, "language": args.language.lower(),
         "model": str(model), "model_size": model.stat().st_size,
         "model_mtime_ns": model.stat().st_mtime_ns,
@@ -133,6 +151,27 @@ def prepare_run(args):
 
 
 def transcribe(args):
+    profile = getattr(args, "profile", None)
+    if profile == "gemini-five-minute":
+        if (args.model or args.vad_model or args.language not in (None, "tr")
+                or args.chunk_seconds != 300 or args.overlap_seconds != 5):
+            raise ValueError("Gemini profile fixes Turkish, 300-second cores and 5-second overlap")
+        if args.apply and not args.authorization:
+            raise ValueError("Gemini execution requires an approved authorization")
+        gemini = runpy.run_path(str(SCRIPTS / "gemini-chunks.py"))
+        result = gemini["transcribe"](args.video, args.output, args.authorization, args.apply)
+        print(json.dumps(result))
+        return result
+    if profile == "whisper-turbo":
+        args.model = args.model or Path.home() / ".local/share/transcribe-audio/models/ggml-large-v3-turbo.bin"
+        if (args.model.name != "ggml-large-v3-turbo.bin" or args.vad_model
+                or args.chunk_seconds != 300 or args.overlap_seconds != 5):
+            raise ValueError("Whisper turbo requires isolated 300-second cores, 5-second overlap, no VAD")
+        args.language = args.language or "tr"
+    return transcribe_whisper(args)
+
+
+def transcribe_whisper(args):
     # 1. Bind a resumable output folder to this exact video and settings.
 
     run, ffmpeg, whisper = prepare_run(args)
@@ -212,15 +251,20 @@ def main():
     parser.add_argument("--model", type=Path)
     parser.add_argument("--vad-model", type=Path, help="optional Silero model")
     parser.add_argument("--chunk-seconds", type=float, default=300)
-    parser.add_argument("--overlap-seconds", type=float, default=2)
+    parser.add_argument("--overlap-seconds", type=float, default=5)
+    parser.add_argument("--profile", choices=("whisper-turbo", "gemini-five-minute"))
+    parser.add_argument("--authorization", type=Path)
+    parser.add_argument("--apply", action="store_true", help="authorize Gemini execution from the supplied receipt")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     if args.check:
         check()
         return
 
-    if args.video is None or args.output is None or args.language is None or args.model is None:
-        parser.error("provide video, output folder, --language, and --model")
+    if args.video is None or args.output is None:
+        parser.error("provide video and output folder")
+    if args.profile is None and (args.language is None or args.model is None):
+        parser.error("provide --profile or --language and --model")
 
     transcribe(args)
 

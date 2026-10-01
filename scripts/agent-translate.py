@@ -198,6 +198,10 @@ def apply(source, progress, response):
                 or ("text" in row) == ("defer_reason" in row)
                 or set(row) - {"cue_id", "text", "defer_reason"}):
             raise ValueError("Each cue needs English text or a specific defer_reason")
+    if any(str(row["cue_id"]) in record["translations"]
+           and ("text" not in row or row["text"].strip() != record["translations"][str(row["cue_id"])])
+           for row in rows):
+        raise ValueError("English already exists; use a reviewed correction")
     key = str(number)
     saved = {str(row["cue_id"]): ({"text": row["text"].strip()}
              if "text" in row else {"defer_reason": row["defer_reason"].strip()})
@@ -234,8 +238,9 @@ def apply(source, progress, response):
     return record
 
 
-def import_responses(source, progress, response, batch_size=12):
+def import_responses(source, progress, response, batch_size=12, correction=False):
     """Checkpoint any sized agent-authored set without episode-specific parsing code."""
+    progress_hash = digest(progress) if progress.exists() else None
     cues, record = current(source, progress, batch_size)
     authored = json.loads(response.read_text(encoding="utf-8"))
     rows = authored.get("translations")
@@ -244,6 +249,9 @@ def import_responses(source, progress, response, batch_size=12):
             or not authored["reviewer"].strip()
             or not isinstance(rows, list) or not rows):
         raise ValueError("Import needs current source hash, reviewer, and translations")
+    if correction and (authored.get("progress_sha256") != progress_hash
+                       or not authored.get("reason")):
+        raise ValueError("English correction needs current checkpoint hash and reason")
     valid_ids = {cue["id"] for cue in cues}
     seen = set()
     for row in rows:
@@ -259,12 +267,20 @@ def import_responses(source, progress, response, batch_size=12):
                 or set(row) - {"cue_id", "text", "defer_reason"}):
             raise ValueError("Each import row needs English text or a defer_reason")
         key = str(row["cue_id"])
-        if translated and key in record["translations"] and (
+        if not correction and translated and key in record["translations"] and (
                 record["translations"][key] != row["text"].strip()):
             raise ValueError("Changed English needs a source rebase or a reviewed paired edit")
         if deferred and key in record["translations"]:
             raise ValueError("Cannot defer an accepted English cue without a source rebase")
 
+    if correction:
+        record.setdefault("history", []).append({
+            "reason": "english_correction", "reviewer": authored["reviewer"],
+            "explanation": authored["reason"], "response_sha256": digest(response),
+            "old_translations": {str(row["cue_id"]): record["translations"].get(str(row["cue_id"]))
+                                 for row in rows}})
+        # Old batch responses must never overwrite corrected English on replay.
+        record["batches"] = {}
     # Commit all rows together after checking the entire input.
     for row in rows:
         key = str(row["cue_id"])
@@ -273,11 +289,34 @@ def import_responses(source, progress, response, batch_size=12):
             record["deferred"].pop(key, None)
         else:
             record["deferred"][key] = row["defer_reason"].strip()
-    record.setdefault("imports", []).append({
+    record.setdefault("imports", []).append({"kind": "english_correction" if correction else "agent_translation",
         "reviewer": authored["reviewer"], "source_sha256": record["source_sha256"],
         "response_sha256": digest(response), "cue_ids": sorted(seen),
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     })
+    save(progress, record)
+    return record
+
+
+def import_provider(source, progress, report_path, batch_size=12):
+    """Reuse the checkpoint store while keeping provider authorship distinct."""
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    output = Path(report["output"])
+    if (report.get("status") != "provider_draft" or report.get("semantic_approved") is not False
+            or report.get("provider") != "deepseek" or report.get("source_sha256") != digest(source)
+            or report.get("output_sha256") != digest(output) or output.suffix.lower() != ".srt"):
+        raise ValueError("Provider draft is stale or unsupported")
+    cues, record = current(source, progress, batch_size)
+    english = READ_CUES(output)
+    if record["translations"] or record["deferred"] or len(cues) != len(english):
+        raise ValueError("Provider import needs empty progress and complete source coverage")
+    if any((left["start"], left["end"]) != (right["start"], right["end"])
+           for left, right in zip(cues, english)):
+        raise ValueError("Provider cues differ from source timeline")
+    record["translations"] = {str(cue["id"]): target["text"]
+                              for cue, target in zip(cues, english)}
+    record["provider_draft"] = {"provider": report["provider"], "model": report["model"],
+                                "report": str(report_path.resolve()), "sha256": digest(report_path)}
     save(progress, record)
     return record
 
@@ -308,9 +347,12 @@ def export(source, progress, output, partial=False):
               "untranslated_source_ids": sorted(int(key) for key in missing),
               "deferred": {key: value for key, value in record["deferred"].items()
                            if key in missing},
+              "provider_draft": record.get("provider_draft"), "semantic_approved": False,
+              "english_corrections": sum(item.get("kind") == "english_correction"
+                                         for item in record.get("imports", [])),
               "agent_batches": len(record["batches"]),
               "agent_imports": len(record.get("imports", [])),
-              "note": "Agent-authored draft; unresolved source cues are absent from partial export and final release remains blocked."}
+              "note": "Translation draft; provider provenance is retained. Semantic approval is recorded separately."}
     save(output.with_suffix(".agent-translation.json"), report)
     return report
 
@@ -332,6 +374,15 @@ def main():
     importing.add_argument("progress", type=Path)
     importing.add_argument("response", type=Path)
     importing.add_argument("--batch-size", type=int, default=12)
+    correcting = actions.add_parser("correct", help="save reviewed English changes against current progress")
+    correcting.add_argument("source", type=Path)
+    correcting.add_argument("progress", type=Path)
+    correcting.add_argument("response", type=Path)
+    provider_import = actions.add_parser("import-provider")
+    provider_import.add_argument("source", type=Path)
+    provider_import.add_argument("progress", type=Path)
+    provider_import.add_argument("report", type=Path)
+    provider_import.add_argument("--batch-size", type=int, default=12)
     exporting = actions.add_parser("export")
     exporting.add_argument("source", type=Path)
     exporting.add_argument("progress", type=Path)
@@ -346,9 +397,14 @@ def main():
         record = apply(args.source, args.progress, args.response)
         print(json.dumps({"translated": len(record["translations"]),
                           "total": record["cue_count"]}))
-    elif args.action == "import":
+    elif args.action == "import-provider":
+        record = import_provider(args.source, args.progress, args.report, args.batch_size)
+        print(json.dumps({"translated": len(record["translations"]), "origin": "deepseek", "semantic_approved": False}))
+    elif args.action in ("import", "correct"):
         record = import_responses(args.source, args.progress, args.response,
-                                  args.batch_size)
+                                  (json.loads(args.progress.read_text())["batch_size"]
+                                   if args.action == "correct" else args.batch_size),
+                                  correction=args.action == "correct")
         print(json.dumps({"translated": len(record["translations"]),
                           "deferred": len(record["deferred"]),
                           "total": record["cue_count"]}))

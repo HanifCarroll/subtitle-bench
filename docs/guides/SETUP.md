@@ -1,6 +1,6 @@
 # Subtitle Bench pilot environment
 
-These are the versions observed on the 2026-09-28 Mac pilot, rather than a claim that other versions are compatible.
+These are the versions observed on the 2026-09-28 Mac pilot, rather than a claim that other versions are compatible. Qualification-specific settings below describe the historical frozen route. Use [PROCESS.md](../../PROCESS.md) for current strategy and [the report index](../reports/README.md) for later experiments; verify the selected environment before a new run.
 
 | Component | Observed version or revision | Used for |
 | --- | --- | --- |
@@ -19,7 +19,7 @@ These are the versions observed on the 2026-09-28 Mac pilot, rather than a claim
 
 The normal workbench and tests use the Python standard library. Keep model environments separate from the code repository and media workspace. Do not copy model weights, commercial subtitles, clips, provider responses, or credentials into Git. Before a new run, verify the executable and model versions in the chosen environment; the current default shell Python does **not** import WhisperX or `mlx-audio`.
 
-The current qualification environment additionally needs the 2.9 GB large-v3 model at `/Users/hanifcarroll/.local/share/transcribe-audio/models/ggml-large-v3.bin`. `qualification-runner.py verify` checks its exact hash and the frozen workflow files before a held-out run.
+The frozen qualification environment additionally needs the 2.9 GB large-v3 model at `/Users/hanifcarroll/.local/share/transcribe-audio/models/ggml-large-v3.bin`. `qualification-runner.py verify` checks its exact hash and the frozen workflow files before a held-out run. The campaign is paused; those path/hash snapshots refer to their recorded Git revision and have not been rewritten for the current process or guide locations.
 
 ```sh
 python3 --version
@@ -56,4 +56,4 @@ The install commands specify top-level versions. For v2 qualification, `qualific
 
 `gemini-audio-review.py` and `gemini-full-audio.py` use `/Users/hanifcarroll/.local/share/subtitle-bench/env-gemini/bin/python` with `google-genai==2.23.0`. Check that `GEMINI_API_KEY` is present without printing its value. The Gemini 3.8 Flash two-stage and full-episode paths require an approved, video-hash-bound episode authorization before `--apply`, disable SDK model-call retries, and save usage and deletion receipts outside Git. `elevenlabs-scribe-trial.py` uses Python's standard library; without `--key-file` it validates the three approved clips and makes no upload. A live trial requires an owner-only (`0600`) private file containing one `ELEVENLABS_API_KEY=...` line. Pass its **path**, never the key, and keep result receipts outside Git. This pilot completed three Scribe v2 calls on 68 seconds of audio and deleted all three remote transcripts after saving the local responses. It did not reveal a billed amount.
 
-The current [experiment report](EXPERIMENTS-2026-09-28.md) names the real case paths and measured outcomes. [WORKBENCH.md](WORKBENCH.md) gives the operator sequence and release gate.
+The [September 28 experiment report](../reports/EXPERIMENTS-2026-09-28.md) names that pilot's case paths and measured outcomes. [WORKBENCH.md](WORKBENCH.md) gives current commands and the release gate.

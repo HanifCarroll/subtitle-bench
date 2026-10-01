@@ -55,7 +55,7 @@ Episode 38 was not used to tune the Episode 39 thresholds. Its full local `episo
 
 ## Reproduce the checks
 
-Run the offline suite in [README.md](README.md). With the private case paths above, the main real-media steps were:
+Run the offline suite in [README.md](../../README.md). With the private case paths above, the main real-media steps were:
 
 ```sh
 python3 scripts/semantic-review.py check PILOT/e39-utterances.json PILOT/e39-semantic-reviews \
@@ -72,4 +72,4 @@ python3 scripts/elevenlabs-scribe-trial.py PILOT/scribe-trial-plan.json PILOT/sc
   --key-file /Users/hanifcarroll/.config/subtitle-workflow/.env
 ```
 
-`PILOT`, `EP39.webm`, and `WORKING.*.srt` stand for the absolute private paths named above; they are labels, not shell variables. A new rendering run needs a new output directory. Release uses the complete `release` command in [WORKBENCH.md](WORKBENCH.md) and omits `--apply` for a dry run.
+`PILOT`, `EP39.webm`, and `WORKING.*.srt` stand for the absolute private paths named above; they are labels, not shell variables. A new rendering run needs a new output directory. Release uses the complete `release` command in [WORKBENCH.md](../guides/WORKBENCH.md) and omits `--apply` for a dry run.

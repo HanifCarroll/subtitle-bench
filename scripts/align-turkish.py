@@ -83,16 +83,31 @@ def summarize_words(segment, unit, audio_start_ms):
             "status": status}
 
 
+def source_data(path):
+    """Accept current Turkish SRT before English, or validate a bilingual map."""
+    if path.suffix.lower() == ".srt":
+        cues = SEMANTIC["read_cues"](path)
+        if not cues:
+            raise ValueError("Turkish source is empty")
+        return {"source": str(path.resolve()), "source_sha256": digest(path),
+                "utterances": [
+                    {"id": f"u{cue['id']:06d}-{cue['start']:09d}",
+                     "text": cue["text"], "start_ms": cue["start"],
+                     "end_ms": cue["end"], "cue_ids": [cue["id"]]}
+                    for cue in cues]}
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    SEMANTIC["validate"](manifest, Path(manifest["source"]), Path(manifest["target"]))
+    return manifest
+
+
 def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
     """Resume per-window alignment; subtitle changes rerun only affected windows."""
 
     # 1. Verify immutable media and current Turkish text before loading a model.
 
     video = video.resolve(strict=True)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = source_data(manifest_path)
     source = Path(manifest["source"])
-    target = Path(manifest["target"])
-    SEMANTIC["validate"](manifest, source, target)
     video_sha256 = digest(video)
     duration = duration_ms(video)
     jobs = list(windows(manifest["utterances"], duration, core_ms))
@@ -166,8 +181,10 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
                                           "word_timings": [], "unaligned_words": [],
                                           "suspicious_words": [], "status": "failed",
                                           "error": str(error)})
+            if digest(source) != manifest["source_sha256"]:
+                raise ValueError("Turkish source changed during alignment; preserve and resume current windows")
             report = {"video": str(video), "video_sha256": video_sha256,
-                      "source_sha256": digest(source), "manifest": str(manifest_path),
+                      "source_sha256": manifest["source_sha256"], "manifest": str(manifest_path),
                       "model": model_name, "model_revision": model_revision,
                       "whisperx_version": importlib.metadata.version("whisperx"),
                       "device": "cpu", "audio_start_ms": audio_start,
@@ -187,7 +204,7 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("video", type=Path)
-    parser.add_argument("manifest", type=Path)
+    parser.add_argument("manifest", type=Path, help="current Turkish SRT or bilingual utterance map")
     parser.add_argument("output", type=Path)
     parser.add_argument("--window-seconds", type=int, default=60)
     parser.add_argument("--dry-run", action="store_true")

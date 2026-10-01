@@ -1088,6 +1088,51 @@ def check():
     print("check ok")
 
 
+def ready_checkpoint(source, decision_path, output):
+    """Save the agent's substantive source decision, not an automatic audit pass."""
+    decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    source_hash = FILE_HASH(source)
+    required = ("coverage_assessed", "material_defects_repaired", "speech_timing_usable",
+                "ordinary_dialogue_review_complete")
+    if (decision.get("source_sha256") != source_hash
+            or any(decision.get(key) is not True for key in required)
+            or decision.get("remaining_source_work") != []
+            or not decision.get("reviewer") or not decision.get("reason")
+            or not decision.get("evidence")):
+        raise ValueError("Turkish source work is incomplete or its decision is stale")
+    READ_CUES(source)
+    evidence = []
+    for raw in decision["evidence"]:
+        path = Path(raw).resolve(strict=True)
+        evidence.append({"path": str(path), "sha256": FILE_HASH(path)})
+    if output.exists() or output.resolve() in {source.resolve(), decision_path.resolve()}:
+        raise ValueError("Use a new ready checkpoint path")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint = {**decision, "status": "turkish_ready", "source": str(source.resolve()),
+                  "source_sha256": source_hash, "evidence": evidence,
+                  "decision_sha256": FILE_HASH(decision_path),
+                  "note": "Agent source-work checkpoint; not independent accuracy certification."}
+    save_json(output, checkpoint)
+    return checkpoint
+
+
+def check_ready(source, checkpoint_path):
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    if (checkpoint.get("status") != "turkish_ready"
+            or checkpoint.get("source_sha256") != FILE_HASH(source)
+            or Path(checkpoint.get("source", "")).resolve() != source.resolve()
+            or checkpoint.get("remaining_source_work") != []):
+        raise ValueError("Turkish-ready checkpoint is stale or incomplete")
+    if (not checkpoint.get("evidence") or any(checkpoint.get(key) is not True for key in
+            ("coverage_assessed", "material_defects_repaired", "speech_timing_usable",
+             "ordinary_dialogue_review_complete"))):
+        raise ValueError("Turkish-ready checkpoint has incomplete source work")
+    for item in checkpoint["evidence"]:
+        if FILE_HASH(Path(item["path"])) != item["sha256"]:
+            raise ValueError("Turkish-ready evidence changed")
+    return checkpoint
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1117,11 +1162,22 @@ def main():
     )
     decision.add_argument("case", type=Path)
     decision.add_argument("decision", type=Path)
+    ready = commands.add_parser("ready", help="record completed Turkish work before translation")
+    ready.add_argument("source", type=Path)
+    ready.add_argument("decision", type=Path)
+    ready.add_argument("output", type=Path)
+    checking_ready = commands.add_parser("check-ready")
+    checking_ready.add_argument("source", type=Path)
+    checking_ready.add_argument("checkpoint", type=Path)
     commands.add_parser("check")
     args = parser.parse_args()
 
     if args.command == "check":
         check()
+    elif args.command == "ready":
+        print(json.dumps(ready_checkpoint(args.source, args.decision, args.output)))
+    elif args.command == "check-ready":
+        print(json.dumps(check_ready(args.source, args.checkpoint)))
     elif args.command == "prepare":
         prepare(args)
     elif args.command == "coverage":

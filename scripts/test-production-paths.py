@@ -4,10 +4,11 @@
 import json
 import runpy
 import tempfile
+import sys
 import unittest
 from argparse import Namespace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -93,6 +94,71 @@ class ProductionPathsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Completed clip changed"):
                 TRANSCRIBE["run_clip"](clip, 0, root, root / "video.webm", "tr",
                                        root / "model.bin", None, "ffmpeg", "whisper-cli")
+
+    def test_whisper_zero_duration_preserves_raw_and_flags_provisional_timing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "clips").mkdir()
+            clip = {"offset_ms": 0, "core_start_ms": 0, "core_end_ms": 1000, "audio_end_ms": 1000}
+            def fake_run(command, **_):
+                if command[0] == "ffmpeg":
+                    Path(command[-1]).write_bytes(b"audio")
+                else:
+                    prefix = Path(command[command.index("-of") + 1])
+                    prefix.with_suffix(".srt").write_text("1\n00:00:00,500 --> 00:00:00,500\nAh.\n")
+            with patch.object(TRANSCRIBE["run_clip"].__globals__["subprocess"], "run", side_effect=fake_run):
+                TRANSCRIBE["run_clip"](clip, 0, root, root / "video", "tr", root / "model", None, "ffmpeg", "whisper")
+            self.assertIn("00:00:00,500 --> 00:00:00,500", (root / "clips/000.raw.srt").read_text())
+            self.assertIn("00:00:00,500 --> 00:00:00,501", (root / "clips/000.srt").read_text())
+            self.assertEqual(len(json.loads((root / "clips/000.complete.json").read_text())["provisional_timing_fixes"]), 1)
+
+    def test_gemini_profile_plans_tested_chunks_without_upload(self):
+        gemini = runpy.run_path(str(SCRIPTS / "gemini-chunks.py"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            video = root / "video.webm"
+            video.write_bytes(b"video")
+            with patch.dict(gemini["TRANSCRIBE"], {"video_duration": lambda *_: 610000}):
+                result = gemini["transcribe"](video, root / "run", None)
+            self.assertEqual(result["clips"], 3)
+            self.assertEqual(result["settings"]["overlap_ms"], 5000)
+            self.assertEqual(result["settings"]["max_output_tokens"], 32768)
+            self.assertEqual(gemini["parse_transcript"]("00:01.250 --> 00:02.500 | Merhaba.", 10000)[0]["start_ms"], 1250)
+            for invalid in ("summary only", "00:01.000 --> 00:01.000 | Ah.", "00:01.000 --> 00:12.000 | Ah."):
+                with self.assertRaises(ValueError):
+                    gemini["parse_transcript"](invalid, 10000)
+
+    def test_gemini_incomplete_response_is_saved_and_deleted(self):
+        gemini = runpy.run_path(str(SCRIPTS / "gemini-chunks.py"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            video = root / "video"
+            video.write_bytes(b"video")
+            client = MagicMock()
+            client.files.upload.return_value.name = "remote-file"
+            client.files.get.return_value.name = "remote-file"
+            client.files.get.return_value.state.name = "ACTIVE"
+            result = client.interactions.create.return_value
+            result.model_dump.return_value = {"status": "incomplete", "outputs": []}
+            result.output_text = "00:01.000 --> 00:02.000 | Merhaba."
+            result.usage.model_dump.return_value = {"total_output_tokens": 10}
+            fake_genai = MagicMock()
+            fake_genai.Client.return_value = client
+            budget = MagicMock()
+            budget.sha256 = "auth"
+            def extract(_, __, audio):
+                audio.write_bytes(b"audio")
+            with patch.dict(sys.modules, {"google": MagicMock(genai=fake_genai),
+                                          "google.genai": fake_genai}), \
+                 patch.dict(gemini["TRANSCRIBE"], {"video_duration": lambda *_: 10000}), \
+                 patch.dict(gemini["REVIEW"], {"EpisodeBudget": lambda *_: budget, "extract_audio": extract}):
+                with self.assertRaisesRegex(ValueError, "provider response is incomplete"):
+                    gemini["transcribe"](video, root / "run", root / "auth.json", apply=True)
+            receipt = json.loads((root / "run/clips/000.json").read_text())
+            self.assertEqual(receipt["provider_status"], "incomplete")
+            self.assertEqual(receipt["provider_file_deletion"], "deleted")
+            self.assertFalse((root / "run/clips/000.srt").exists())
+            client.files.delete.assert_called_once_with(name="remote-file")
 
     def test_qualification_run_rejects_changed_inputs_on_resume(self):
         with tempfile.TemporaryDirectory() as temporary:

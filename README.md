@@ -1,8 +1,20 @@
-# Subtitle workbench
+# Subtitle Bench
 
-Subtitle Bench develops and qualifies a reusable agent-operated subtitle-production process for unseen Turkish episodes. Start with [PROCESS.md](PROCESS.md) for the current strategy, [WORKBENCH.md](WORKBENCH.md) for commands, and [qualification/PROTOCOL.md](qualification/PROTOCOL.md) for held-out testing. Individual episodes are cases, not the project's deliverable. Run workbench commands from this repository with `python3 scripts/subtitle-workbench.py`.
+Subtitle Bench connects Turkish transcription, source repair and timing, a Turkish-ready checkpoint, bulk English, contextual review, and final layout/export/playback checks. Individual episodes are development or qualification cases. Run commands from the repository root with `python3 scripts/subtitle-workbench.py`.
 
-The qualification campaign remains paused. The [recovery experiment](RECOVERY-RESULTS-2026-09-29.md), [spoken-dialogue test](SPOKEN-RECOVERY-RESULTS-2026-09-29.md), and [E040 development integration](DEVELOPMENT-INTEGRATION-RESULTS-2026-09-29.md) show what has and has not worked. The integration produced a complete accounting but an unreleasable episode, so no new workflow freeze or held-out run has started. [DEVELOPMENT-AGENT-PROMPT.md](DEVELOPMENT-AGENT-PROMPT.md) is the reusable entry prompt.
+## Start here
+
+| Document | Purpose |
+|---|---|
+| [Current process](PROCESS.md) | Authoritative production order and provisional English choice. |
+| [Agent entry prompt](docs/guides/DEVELOPMENT-AGENT-PROMPT.md) | Begin or resume production with a selectable Whisper/Gemini profile. |
+| [Workbench guide](docs/guides/WORKBENCH.md) | Existing commands, checkpoints and release procedure. |
+| [Pipeline overview](docs/guides/SUBTITLE-PIPELINE.md) | Tool connections and remaining limitations. |
+| [Environment notes](docs/guides/SETUP.md) | Recorded local setup and model versions. |
+| [Development reports](docs/reports/README.md) | Results, measurements and decisions, latest first. |
+| [Qualification assessment](qualification/ASSESSMENT.md) | Separate frozen-run outcomes; campaign paused. |
+
+The latest [English-path comparison](docs/reports/ENGLISH-PATH-COMPARISON-2026-10-01.md) completed a 10.5-minute development section. DeepSeek drafting plus mandatory agent review was faster in that run and is the provisional English path. The earlier [E023 downstream comparison](docs/reports/E023-DOWNSTREAM-COMPARISON-2026-10-01.md) left every full-episode pair incomplete. No new workflow freeze or held-out run has started. Frozen qualification documents and path/hash snapshots describe their recorded Git revisions, not the current production strategy or directory layout.
 
 The code and procedure are versioned here. Episode videos, commercial subtitle files, model caches, audio clips, review cases, provider credentials, and installation backups remain in the local `~/Movies/Leyla ile Mecnun/Workflow` workspace. Pass their paths to the commands; do not copy them into this repository.
 
@@ -10,9 +22,9 @@ The [OpenSubtitles archive helpers](opensubtitles-archive/README.md) are version
 
 [Historical scripts and research notes](history/README.md) are kept separately from the current workbench. They are snapshots, not supported entry points.
 
-The local checks need Python 3, FFmpeg, ffprobe, and the existing Silero model. `episode-check` also needs the local MLX audio environment with Qwen3 ASR. Transcription needs whisper.cpp. The agent writes and reviews English directly; any separate billable provider call or upload requires verified authorization. None of the tests make a provider call. See [SETUP.md](SETUP.md) for the versions used in the current pilot and [EXPERIMENTS-2026-09-28.md](EXPERIMENTS-2026-09-28.md) for its results.
+The local checks need Python 3, FFmpeg, ffprobe, and the existing Silero model. `episode-check` also needs the local MLX audio environment with Qwen3 ASR. Transcription needs whisper.cpp. English generation supports DeepSeek Flash drafts with agent correction or direct agent translation, both with contextual review; any separate billable provider call or upload requires verified authorization. None of the portable tests make a provider call.
 
-Run the portable checks:
+## Portable checks
 
 ```sh
 python3 scripts/test-subtitle-workbench.py
@@ -28,4 +40,7 @@ python3 scripts/test-production-paths.py
 python3 scripts/test-local-audio-review.py
 python3 scripts/test-agent-translate.py
 python3 scripts/test-bind-gemini-review.py
+python3 scripts/test-join-clip-drafts.py
+python3 scripts/test-read-only-pair.py
+python3 scripts/test-gemini-episode-budget.py
 ```
