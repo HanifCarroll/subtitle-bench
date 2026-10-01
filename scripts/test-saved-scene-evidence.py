@@ -82,11 +82,16 @@ def check():
                                          'disagreements': []})
         # A new rejection at the same interval invalidates approval without editing subtitles.
         raw['comparison_parsed'][0]['evidence_explanation'] = 'New material contrary evidence.'
+        # Actual targeted responses may wrap findings and name clip-relative intervals.
+        finding = raw['comparison_parsed'][0]
+        finding['clip_relative_interval'] = finding.pop('interval')
+        raw['comparison_parsed'] = {'disputed_intervals': [finding]}
         save('focused.json', raw)
         case['saved_evidence'][0]['sha256'] = S['FILE_HASH'](receipt)
         save('case.json', case)
         blocked()
         assert W['current_queue'](root)[1]
+        assert S['saved_scene_evidence'](root, case, 800, 1200)[0]['text'] == finding['evidence_explanation']
         # Native word timings expose speech wholly inside a subtitle gap, in the same scene.
         native = save('scribe.json', {'status': 'complete', 'video_sha256': video_hash,
              'model': 'synthetic-scribe', 'raw_response': {'words': [

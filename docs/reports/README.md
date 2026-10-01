@@ -6,7 +6,7 @@ Start with [the current process](../../PROCESS.md), then read the E023 finalizat
 
 | Report | Outcome |
 |---|---|
-| [E023 finalization — October 1](E023-FINALIZATION-2026-10-01.md) | Receipt mismatch resolved; frozen-pair reference comparison completed. Four source questions and an English idiom keep content held; native playback unverified. |
+| [E023 finalization — October 1](E023-FINALIZATION-2026-10-01.md) | Development closed after two-passage review; supported repairs and honest uncertainty exported separately. Frozen-pair comparison preserved; no accepted release, installation or unseen qualification. |
 | [E023 source-first production — October 1](E023-SOURCE-FIRST-PRODUCTION-2026-10-01.md) | Historical full-export checkpoint; later finalization supersedes its completeness assessment. Stage times, repairs and evidence preserved. |
 | [English-path comparison — October 1](ENGLISH-PATH-COMPARISON-2026-10-01.md) | Completed 10.5-minute section. DeepSeek draft plus mandatory agent review was faster in this run; provisional English choice. Full E023 was incomplete at that checkpoint. |
 | [E023 downstream comparison — October 1](E023-DOWNSTREAM-COMPARISON-2026-10-01.md) | All three pairs incomplete. Gemini led the bounded partial checkpoint, but source review stopped too early. Motivated the source-ready checkpoint. |

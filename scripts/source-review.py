@@ -302,12 +302,19 @@ def saved_scene_evidence(directory, case, start_ms, end_ms):
                 raise ValueError("Saved scene receipt is incomplete or from another video")
             model = raw["model"]
             if "comparison_parsed" in raw:
-                rows = [{"start_ms": raw["start_ms"] + round(r["interval"][0] * 1000),
-                         "end_ms": raw["start_ms"] + round(r["interval"][1] * 1000),
+                findings = raw["comparison_parsed"]
+                if isinstance(findings, dict):
+                    findings = findings.get("findings", findings.get("disputed_intervals"))
+                if not isinstance(findings, list):
+                    raise ValueError("Saved comparison needs findings or disputed intervals")
+                rows = [{"start_ms": raw["start_ms"] + round(
+                             r.get("interval", r.get("clip_relative_interval"))[0] * 1000),
+                         "end_ms": raw["start_ms"] + round(
+                             r.get("interval", r.get("clip_relative_interval"))[1] * 1000),
                          "text": r["evidence_explanation"], "kind": "saved_review",
                          "candidate": r["current_wording"],
                          "alternative": r["proposed_repair"]}
-                        for r in raw["comparison_parsed"]]
+                        for r in findings]
             else:
                 rows = [{"start_ms": round(w["start"] * 1000),
                          "end_ms": round(w["end"] * 1000),
