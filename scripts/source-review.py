@@ -280,6 +280,41 @@ def evidence_disagreements(directory, case):
     return issues
 
 
+def local_acoustic_rows(raw, first, last):
+    """Validate typed local observations without converting activity into words."""
+    if (not isinstance(raw.get("audio_clip"), str)
+            or not isinstance(raw.get("model"), str) or not raw["model"].strip()
+            or not isinstance(raw.get("model_revision"), str) or not raw["model_revision"].strip()):
+        raise ValueError("Local acoustic evidence needs a model, revision, and clip path")
+    audio = Path(raw["audio_clip"])
+    if (not audio.is_file() or FILE_HASH(audio) != raw.get("audio_sha256")
+            or type(raw.get("start_ms")) is not int or type(raw.get("end_ms")) is not int
+            or not 0 <= raw["start_ms"] <= first < last <= raw["end_ms"]):
+        raise ValueError("Local acoustic evidence has changed or lacks its input identity")
+    if "probabilities" in raw or "probabilities_sha256" in raw:
+        frames = raw.get("probabilities")
+        if (not isinstance(frames, str) or not Path(frames).is_file()
+                or FILE_HASH(Path(frames)) != raw.get("probabilities_sha256")):
+            raise ValueError("Local acoustic frame probabilities are missing or changed")
+    if not isinstance(raw.get("observations"), list):
+        raise ValueError("Local acoustic evidence needs observations")
+    rows = []
+    for row in raw["observations"]:
+        if (not isinstance(row, dict) or row.get("kind") not in ("audio_event", "asr", "local_audio_observation")
+                or type(row.get("start_ms")) is not int or type(row.get("end_ms")) is not int
+                or not raw["start_ms"] <= row["start_ms"] < row["end_ms"] <= raw["end_ms"]
+                or not isinstance(row.get("text"), str) or not row["text"].strip()):
+            raise ValueError("Invalid local acoustic observation")
+        if row["kind"] == "audio_event":
+            confidence = row.get("confidence")
+            if (row.get("label") not in ("speech", "singing", "music")
+                    or (confidence is not None and (type(confidence) not in (float, int)
+                         or not math.isfinite(confidence) or not 0 <= confidence <= 1))):
+                raise ValueError("Invalid local event label or confidence")
+        rows.append(row.copy())
+    return rows
+
+
 def saved_scene_evidence(directory, case, start_ms, end_ms):
     """Expose registered original receipts in the existing scene review, offline."""
     observations = []
@@ -301,7 +336,9 @@ def saved_scene_evidence(directory, case, start_ms, end_ms):
             if raw.get("status") != "complete" or raw.get("video_sha256") != case["video_sha256"]:
                 raise ValueError("Saved scene receipt is incomplete or from another video")
             model = raw["model"]
-            if "comparison_parsed" in raw:
+            if raw.get("kind") == "local_acoustic_evidence":
+                rows = local_acoustic_rows(raw, first, last)
+            elif "comparison_parsed" in raw:
                 findings = raw["comparison_parsed"]
                 if isinstance(findings, dict):
                     findings = findings.get("findings", findings.get("disputed_intervals"))
@@ -337,7 +374,8 @@ def saved_evidence_questions(directory, case, cues):
         if row["kind"] == "saved_review":
             questions.append(issue("evidence_disagreement", row["start_ms"], row["end_ms"],
                                    key, summary=row["text"], evidence=evidence))
-        elif not any(c["start"] < row["end_ms"] and c["end"] > row["start_ms"] for c in cues):
+        elif row["kind"] == "asr" and not any(
+                c["start"] < row["end_ms"] and c["end"] > row["start_ms"] for c in cues):
             questions.append(issue("possible_speech_gap", row["start_ms"], row["end_ms"],
                                    "saved-" + key, summary=row["text"], evidence=evidence))
     return questions

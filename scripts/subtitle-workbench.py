@@ -1359,8 +1359,9 @@ def audio_check(args):
 
     duration_ms = case["duration_ms"]
     window_ms = round(args.window_seconds * 1000)
-    if window_ms < 10_000 or window_ms > 60_000:
-        raise ValueError("Window duration must be between 10 and 60 seconds")
+    # Qwen shares its token budget across chunks; a looping chunk can skip the tail.
+    if window_ms < 10_000 or window_ms > 30_000:
+        raise ValueError("Window duration must be between 10 and 30 seconds")
     if args.max_tokens < 1:
         raise ValueError("Max tokens must be positive")
     if args.start_seconds < 0 or (args.end_seconds is not None
@@ -1417,10 +1418,13 @@ def audio_check(args):
                 result = model.generate(str(clip), language=args.language,
                                         max_tokens=args.max_tokens)
                 finish_reason = getattr(result, "finish_reason", None)
+                generation_tokens = getattr(result, "generation_tokens", None)
                 cache["windows"][str(start)] = {
                     "start_ms": start, "end_ms": end, "text": result.text.strip(),
                     "finish_reason": (finish_reason if isinstance(finish_reason, str)
                                       else None),
+                    "generation_tokens": (generation_tokens if type(generation_tokens) is int
+                                          else None),
                 }
                 save_json(args.cache, cache)
                 clip.unlink()
@@ -1436,7 +1440,9 @@ def audio_check(args):
                                and cue["end"] > start)
         comparison = compare_audio_window(transcript["text"], source_text)
         finish_reason = transcript.get("finish_reason")
-        if finish_reason in ("length", "max_tokens"):
+        generation_tokens = transcript.get("generation_tokens")
+        if (finish_reason in ("length", "max_tokens")
+                or (type(generation_tokens) is int and generation_tokens >= args.max_tokens)):
             status = "truncated"
         elif not transcript["text"]:
             status = "empty"

@@ -58,7 +58,7 @@ class LocalAudioReviewTest(unittest.TestCase):
                                 "text": "Merhaba."}])
             transcription = root / "transcription"
             transcription.mkdir()
-            model = root / "model.bin"
+            model = root / "ggml-large-v3-turbo.bin"
             model.write_bytes(b"test model")
             whisper_srt = transcription / "000.srt"
             WRITE_SRT(whisper_srt, [{"start_ms": 100, "end_ms": 900,
@@ -101,6 +101,7 @@ class LocalAudioReviewTest(unittest.TestCase):
             result = LOCAL["create"](video, source, 100, 900, transcription,
                                       audio_report, decision, root / "result.json")
             self.assertEqual(result["route"], "local_asr_agent")
+            self.assertEqual(result["observations"][0]["model"], "Whisper large-v3-turbo")
             self.assertTrue((root / "result.whisper.json").is_file())
             self.assertTrue((root / "result.qwen.json").is_file())
             qwen = json.loads(audio_report.read_text(encoding="utf-8"))

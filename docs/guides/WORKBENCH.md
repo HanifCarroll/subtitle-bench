@@ -53,6 +53,8 @@ python3 scripts/subtitle-workbench.py audio-check REVIEW-CASE \
 
 Do not require a fresh full Qwen run for every profile or section. Select evidence according to the question in PROCESS.md, record unavailable evidence, and reuse completed reports. The existing release check still reports any missing evidence required for installation.
 
+Qwen windows are limited to 10–30 seconds: the tested runtime shares a token budget across internal chunks and can skip a longer input's tail after a loop. Actual generation-token exhaustion is recorded as truncated. For music/short-reply routing, [the local capability guide](LOCAL-CAPABILITIES-SETUP.md#firered-and-existing-scene-review) shows how to add hash-bound FireRed observations to the same scene timeline. Event labels do not approve words, silence, deletion, or cue trimming; the other tested new models remain outside production acceptance.
+
 ## 4. Resolve issues as an agent
 
 Start with a reported playback error, repeated run, long held cue, and long missing-cue span. Then inspect the independent audio questions and translation flags. For each material interval:

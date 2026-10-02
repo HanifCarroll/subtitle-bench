@@ -96,7 +96,7 @@ def whisper_evidence(transcription, video_hash, start_ms, end_ms):
             raise ValueError("Whisper clip differs from its completion receipt")
         selected.append({**clip, "srt_sha256": SOURCE["FILE_HASH"](srt),
                          "text": srt.read_text(encoding="utf-8")})
-    return (selected, "Whisper large-v3", run["model_sha256"],
+    return (selected, f"Whisper {Path(run['model']).stem.removeprefix('ggml-')}", run["model_sha256"],
             clips[0]["core_start_ms"], clips[-1]["core_end_ms"],
             {"run_sha256": SOURCE["FILE_HASH"](transcription / "run.json"),
              "manifest_sha256": SOURCE["FILE_HASH"](transcription / "manifest.json")})
