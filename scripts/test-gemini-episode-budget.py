@@ -147,6 +147,26 @@ class GeminiEpisodeBudgetTest(unittest.TestCase):
         self.assertEqual(1, len(self.client.interactions.calls))
         self.assertEqual(1, len(self.client.files.deletions))
 
+    def test_explicit_unlimited_approval_retains_usage_and_video_scope(self):
+        self.auth["aggregate_usage_unlimited"] = True
+        self.auth["aggregate_hard_limits"] = {
+            key: self.auth["aggregate_hard_limits"][key]
+            for key in ("max_clip_seconds", "max_output_tokens_per_call")}
+        write_json(self.auth_path, self.auth)
+        self.run_plan("first-unlimited")
+        _, plan, selected, budget = self.run_plan("second-unlimited")
+        ledger = json.loads(budget.ledger_path.read_text())
+        calls = [event for event in ledger["events"] if event["kind"] == "model_call"]
+        self.assertEqual(4, len(calls))
+        self.assertEqual(2, len(self.client.files.uploads))
+        self.assertEqual(2, len(self.client.files.deletions))
+        self.assertTrue(all("usage" in event and event["estimated_charge_usd"] > 0
+                            for event in calls))
+        self.auth["scope"]["video_sha256"] = "b" * 64
+        write_json(self.auth_path, self.auth)
+        with self.assertRaisesRegex(ValueError, "does not cover"):
+            SCRIPT["EpisodeBudget"](self.auth_path, plan, selected)
+
     def test_changed_acoustic_question_cannot_reuse_completed_review(self):
         path, plan, selected, budget = self.run_plan("focus")
         plan["independent_focus"] = "Distinguish vocal articulation from instrumental melody."

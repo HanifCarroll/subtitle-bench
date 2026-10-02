@@ -6,6 +6,7 @@ Start with [the current process](../../PROCESS.md), then choose the relevant rep
 
 | Report | Outcome |
 |---|---|
+| [E042 full hybrid trial and reference comparison — October 2](E042-HYBRID-COMPARISON-2026-10-02.md) | Frozen 1,816-cue pair, 98.3 minutes; US$2.287 provider estimate / US$10.66 including Standard agent API equivalent. Turkish reference disagreement fell from 23.8% to 14.2%; reference pair remains preferable for viewing. Release held; no installation. |
 | [E041 hybrid continuation — October 2](E041-HYBRID-PRODUCTION-2026-10-02.md) | Supported wording and timing repairs; 79 Gemini calls / 40 uploads, US$0.8502 estimated. Six substantive source holds and further adjudication remain; count amendment pending, English held, no installation. |
 | [Local capability expansion — October 2](LOCAL-CAPABILITY-EXPANSION-2026-10-02.md) | Completed comparison preserved; FireRed targeted routing and Qwen loop robustness retained. Public MLX SAM tested and rejected for word recovery; Meta reference implementation untested. Two preservation slices exported/reviewed; guard remains incomplete. |
 | [E023 finalization — October 1](E023-FINALIZATION-2026-10-01.md) | Development closed after two-passage review; supported repairs and honest uncertainty exported separately. Frozen-pair comparison preserved; no accepted release, installation or unseen qualification. |

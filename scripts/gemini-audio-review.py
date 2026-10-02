@@ -255,11 +255,14 @@ class EpisodeBudget:
         self.lock_path = self.path.parent / "gemini-usage-ledger.lock"
         scope = self.authorization.get("scope", {})
         limits = self.authorization.get("aggregate_hard_limits", {})
+        self.unlimited = self.authorization.get("aggregate_usage_unlimited") is True
         required = ("attempted_model_calls", "audio_uploads",
                     "uploaded_audio_seconds_including_repeats",
                     "processed_audio_seconds_including_repeats", "input_prompt_bytes",
                     "estimated_charge_usd", "max_clip_seconds",
                     "max_output_tokens_per_call")
+        if self.unlimited:
+            required = ("max_clip_seconds", "max_output_tokens_per_call")
         if any(type(limits.get(key)) not in (int, float) or limits[key] <= 0
                for key in required):
             raise ValueError("Episode authorization needs positive aggregate limits")
@@ -349,19 +352,20 @@ class EpisodeBudget:
                 full_calls = sum(item["kind"] == "model_call" and
                                  item.get("stage") == "full_episode_observation"
                                  for item in ledger["events"])
-                if (next_uploads > self.limits["audio_uploads"]
+                if ((not self.unlimited and (
+                        next_uploads > self.limits["audio_uploads"]
                         or next_calls > self.limits["attempted_model_calls"]
                         or next_upload_ms > round(
                             self.limits["uploaded_audio_seconds_including_repeats"] * 1000)
                         or next_processed_ms > round(
                             self.limits["processed_audio_seconds_including_repeats"] * 1000)
                         or next_prompt_bytes > self.limits["input_prompt_bytes"]
+                        or next_cost > Decimal(str(self.limits["estimated_charge_usd"]))))
                         or (event["kind"] == "upload" and
                             event.get("label") == "full-episode" and full_uploads >= 1)
                         or (event["kind"] == "model_call" and
                             event.get("stage") == "full_episode_observation" and
-                            full_calls >= 1)
-                        or next_cost > Decimal(str(self.limits["estimated_charge_usd"]))):
+                            full_calls >= 1)):
                     raise ValueError("Episode Gemini aggregate limit reached; no provider request made")
                 event["id"] = len(ledger["events"]) + 1
                 event["reserved_at_utc"] = datetime.now(timezone.utc).isoformat()
