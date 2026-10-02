@@ -41,21 +41,20 @@ Extra repetitions and forms of address can help Turkish study, while also increa
 
 ## Cost accounting
 
-| Production component | Recorded usage | Estimate / equivalent |
+| Production component | Recorded usage | External cost estimate / plan usage |
 |---|---|---:|
 | Gemini recovery | 246 requests / 123 uploads; 76m26s raw clips including repeats, 152m51s processed | US$2.255946 |
 | DeepSeek English | 28 requests; reported cache hits/misses, all off-peak | US$0.031128 |
 | External provider subtotal | 274 requests | US$2.287074 |
-| Codex agent, Standard API equivalent | 231 usage receipts | US$8.368002 |
-| Production model-cost equivalent | 98.3 elapsed minutes | US$10.655076 ≈ US$10.66 |
+| Codex agent | 231 usage receipts | User's Codex plan; dollar allocation unpriced |
 
-The agent estimate uses 1,429,459 uncached input tokens, 34,964,736 cached input tokens and 201,261 output tokens. Reasoning is included in output. The largest production request had 247,477 input tokens, below the 272K long-context pricing threshold. Recorded cumulative usage is sampled immediately before production and 0.410s after freeze. Cached tokens include repeated conversation context, not distinct subtitle words.
+Agent work ran through the user's Codex plan, with no separate OpenAI API calls. Production plan usage records 1,429,459 uncached input tokens, 34,964,736 cached input tokens and 201,261 output tokens. Reasoning is included in output. Recorded cumulative usage is sampled immediately before production and 0.410s after freeze. Cached tokens include repeated conversation context, not distinct subtitle words. This usage is recorded separately and has no API-rate dollar allocation.
 
 All production Gemini attempts, including malformed responses, retain usage; all 123 upload receipts confirm deletion. Post-freeze evaluation added six requests / three uploads, 74s raw / 148s processed, and US$0.051566; all three files were deleted.
 
-The complete trial through the 2026-10-02T23:29:14.013Z usage checkpoint is US$13.24 at Standard model rates, including preparation and comparison/reporting. Assessment took 26.0 minutes after freeze; subsequent accounting and documentation add overhead. Final delivery after that checkpoint is excluded.
+The complete trial's external provider estimate is US$2.338641, about US$2.34: US$2.287074 for production and US$0.051566 for post-freeze evaluation. Codex preparation, comparison and reporting usage is retained by stage through the 2026-10-02T23:29:14.013Z usage checkpoint. Assessment took 26.0 minutes after freeze; subsequent accounting and documentation add overhead. Final delivery plan usage after that checkpoint is excluded.
 
-Prices were checked against [Google](https://ai.google.dev/gemini-api/docs/pricing), [DeepSeek](https://api-docs.deepseek.com/quick_start/pricing/) and [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol). These are usage-based estimates and a Standard API equivalent, not reconciled invoices or a verified Codex subscription charge. Actual Codex tier/allocation, electricity and hardware costs are unpriced. Bounded episode approval remains the default; this run had explicit user approval without aggregate limits, recorded privately through the [workbench exception](../guides/WORKBENCH.md).
+External estimates use the checked [Google](https://ai.google.dev/gemini-api/docs/pricing) and [DeepSeek](https://api-docs.deepseek.com/quick_start/pricing/) rates; invoices have not been reconciled. The earlier report added hypothetical OpenAI API prices to plan usage. That accounting was misleading and is superseded by this correction. Codex subscription/credit allocation, electricity and hardware costs are unpriced. Bounded episode approval remains the default; this run had explicit user approval without aggregate limits, recorded privately through the [workbench exception](../guides/WORKBENCH.md).
 
 ## Guard state and limits
 
@@ -63,11 +62,11 @@ The production dry release was held by two truncated Qwen scan windows even thou
 
 Nineteen portable checks and 28 sampled bilingual libass renders passed. These establish application/structural/render behavior, not complete linguistic correctness. The agent did not hear audio directly: acoustic evidence comes from hashed original-video clips and saved recognizer observations. Fresh neutral observations use the same provider involved in production and cannot establish independent evaluation. Native IINA playback and a full human watch-through remain unverified. Nothing was installed; both existing sidecars, both references and the frozen pair remain hash-unchanged.
 
-The run shows useful improvement over fresh Whisper and specific English meaning wins. Its remaining limitations are trustworthy source adjudication, contextual English review and reading time. Agent work accounts for most of the Standard model-cost equivalent; the initial English draft is inexpensive.
+The run shows useful improvement over fresh Whisper and specific English meaning wins. Its remaining limitations are trustworthy source adjudication, contextual English review and reading time. Turkish review and recovery took most of the production time; the initial English draft's external cost was small. Codex plan usage is separate from external spending.
 
 ## Private evidence provenance
 
-This is a publication edition of the private `episode-042-hybrid-2026-10-02/comparison/REPORT.md`, SHA-256 `6f900c59af4c11e680a4e43e8c9ac79250599b00648580c18903714c663c1133`. Media, commercial references, subtitle/model excerpts, clips, prompts, provider responses, frame observations, cases, decisions and token ledgers remain outside Git. Reference archive IDs: Turkish 9951024, English 8661760. Frozen track SHA-256 values:
+This is a publication edition of the private `episode-042-hybrid-2026-10-02/comparison/REPORT.md`, SHA-256 `cbd7fe59d021ef770fc009ec02cf7a22eef088e6a50d97eb96c7aafc22d5a818`. Media, commercial references, subtitle/model excerpts, clips, prompts, provider responses, frame observations, cases, decisions and token ledgers remain outside Git. Reference archive IDs: Turkish 9951024, English 8661760. Frozen track SHA-256 values:
 
 - Turkish: `fef822712872463647291054b9feee118b16c88319fd5d415a491758aaa7a6b2`
 - English: `91d9235e7ff338fb9094ff2f8adeaf566890c357f7de4428e6d3e21d80efbeff`
