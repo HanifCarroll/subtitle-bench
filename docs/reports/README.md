@@ -6,7 +6,8 @@ Start with [the current process](../../PROCESS.md), then choose the relevant rep
 
 | Report | Outcome |
 |---|---|
-| [Local capability expansion — October 2](LOCAL-CAPABILITY-EXPANSION-2026-10-02.md) | All feasible requested local acoustic families tested; FireRed targeted routing retained, SAM access-blocked, word recovery insufficient for another full run. Two preservation slices exported/reviewed; guard remains incomplete. |
+| [E041 hybrid continuation — October 2](E041-HYBRID-PRODUCTION-2026-10-02.md) | Separate working case prepared; saved repairs and timing reused. Turkish incomplete, consolidated hosted allowance pending; no provider calls, English generation or installation. |
+| [Local capability expansion — October 2](LOCAL-CAPABILITY-EXPANSION-2026-10-02.md) | Completed comparison preserved; FireRed targeted routing and Qwen loop robustness retained. Public MLX SAM tested and rejected for word recovery; Meta reference implementation untested. Two preservation slices exported/reviewed; guard remains incomplete. |
 | [E023 finalization — October 1](E023-FINALIZATION-2026-10-01.md) | Development closed after two-passage review; supported repairs and honest uncertainty exported separately. Frozen-pair comparison preserved; no accepted release, installation or unseen qualification. |
 | [E023 source-first production — October 1](E023-SOURCE-FIRST-PRODUCTION-2026-10-01.md) | Historical full-export checkpoint; later finalization supersedes its completeness assessment. Stage times, repairs and evidence preserved. |
 | [English-path comparison — October 1](ENGLISH-PATH-COMPARISON-2026-10-01.md) | Completed 10.5-minute section. DeepSeek draft plus mandatory agent review was faster in this run; provisional English choice. Full E023 was incomplete at that checkpoint. |
