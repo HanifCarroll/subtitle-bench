@@ -14,10 +14,12 @@ These are the versions observed on the 2026-09-28 Mac pilot, rather than a claim
 | Qwen3 ASR 1.7B 4-bit | `mlx-community/Qwen3-ASR-1.7B-4bit`, cached revision `78a389c776a5483b2d0d4ea5494e11012e0d6159` | Independent Turkish recognition |
 | WhisperX | 3.8.6 | Corrected Turkish word alignment |
 | Turkish aligner | `mpoyraz/wav2vec2-xls-r-300m-cv7-turkish`, cached `main` revision `708639f50559d7970f462e13ec64d3f059ca89f6` | WhisperX alignment; verify `DEFAULT_ALIGN_MODELS_HF['tr']` |
-| `google-genai` | 2.23.0 | Bounded Gemini two-stage trial |
+| `google-genai` | 2.23.0 | Bounded Gemini two-stage audio review |
 | VideoLingo | commit `11ca23e`, Apache-2.0 | Isolated local transcription-stage comparison |
 
 The normal workbench and tests use the Python standard library. Keep model environments separate from the code repository and media workspace. Do not copy model weights, commercial subtitles, clips, provider responses, or credentials into Git. Before a new run, verify the executable and model versions in the chosen environment; the current default shell Python does **not** import WhisperX or `mlx-audio`.
+
+The [E041 hybrid continuation](../reports/E041-HYBRID-PRODUCTION-2026-10-02.md) reused these installations without upgrades. Saved recognition comparisons must retain the cache's exact model revision, language, window and token settings. Forced alignment can reuse word timings after cue renumbering only when media, words and boundaries are unchanged; see [WORKBENCH.md](WORKBENCH.md). Neither operation repeats initial transcription.
 
 The frozen qualification environment additionally needs the 2.9 GB large-v3 model at `/Users/hanifcarroll/.local/share/transcribe-audio/models/ggml-large-v3.bin`. `qualification-runner.py verify` checks its exact hash and the frozen workflow files before a held-out run. The campaign is paused; those path/hash snapshots refer to their recorded Git revision and have not been rewritten for the current process or guide locations.
 

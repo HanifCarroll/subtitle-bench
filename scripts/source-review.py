@@ -945,11 +945,15 @@ def review_result_blockers(directory, path, start_ms, end_ms, video_sha256,
                 or not isinstance(stage.get("assessment"), str)
                 or not stage["assessment"].strip()):
             return ["Audio review stage lacks a model, prompt, or assessment"]
-        raw = stage.get("raw_response")
-        if (not isinstance(raw, str) or not (directory / raw).is_file()
-                or not (directory / raw).read_bytes()
-                or FILE_HASH(directory / raw) != stage.get("raw_response_sha256")):
+        responses = stage.get("raw_responses", [stage])
+        if not isinstance(responses, list) or not responses:
             return ["Audio review raw response is missing or stale"]
+        for response in responses:
+            raw = response.get("raw_response") if isinstance(response, dict) else None
+            if (not isinstance(raw, str) or not (directory / raw).is_file()
+                    or not (directory / raw).read_bytes()
+                    or FILE_HASH(directory / raw) != response.get("raw_response_sha256")):
+                return ["Audio review raw response is missing or stale"]
 
     return []
 

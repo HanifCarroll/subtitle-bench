@@ -58,6 +58,19 @@ def alignment_input(selected, start_ms, end_ms, video_sha256, model):
     })
 
 
+def alignment_ids_only_changed(saved, selected, start_ms, end_ms, video_sha256, model):
+    """Prove identical audio, words and bounds despite source cue renumbering."""
+    previous = saved.get("utterances", [])
+    if (len(previous) != len(selected) or not previous
+            or any(old.get("text") != unit["text"] or not old.get("id")
+                   for old, unit in zip(previous, selected))):
+        return False
+    original_ids = [{**unit, "id": old["id"]}
+                    for old, unit in zip(previous, selected)]
+    return saved.get("input_sha256") == alignment_input(
+        original_ids, start_ms, end_ms, video_sha256, model)
+
+
 def summarize_words(segment, unit, audio_start_ms):
     """Expose missing and suspicious alignment without changing subtitle text."""
     words = []
@@ -126,19 +139,35 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
                          and not saved.get("model_revision")
                          and saved.get("input_sha256") == legacy_identity)
         cached = saved.get("input_sha256") == identity or legacy_cached
+        remapped_cached = not cached and alignment_ids_only_changed(
+            saved, selected, audio_start, audio_end, video_sha256, model_identity)
+        cached = cached or remapped_cached
         plan.append((path, identity, audio_start, audio_end, selected, cached,
-                     legacy_cached))
+                     legacy_cached, remapped_cached))
     if dry_run:
         return {"windows": len(plan), "cached": sum(job[5] for job in plan),
                 "legacy_revision_unrecorded": sum(job[6] for job in plan),
+                "remapped_cached": sum(job[7] for job in plan),
                 "model": model_name, "model_revision": model_revision,
                 "video_sha256": video_sha256}
 
     # 2. Load the verified Turkish aligner once and process only stale windows.
 
+    for path, identity, _, _, selected, _, _, remapped in plan:
+        if remapped:
+            saved = json.loads(path.read_text())
+            saved["reused_from_input_sha256"] = saved["input_sha256"]
+            saved["reused_from_source_sha256"] = saved["source_sha256"]
+            for previous, unit in zip(saved["utterances"], selected):
+                previous.update(id=unit["id"], source_cue_ids=unit["cue_ids"])
+            saved.update(input_sha256=identity, source_sha256=manifest["source_sha256"],
+                         manifest=str(manifest_path),
+                         reuse_note="Only IDs remapped; original media, text and bounds hash verified. No inference.")
+            SEMANTIC["save_json"](path, saved)
     missing = [job for job in plan if not job[5]]
     if not missing:
         return {"windows": len(plan), "cached": len(plan), "aligned": 0,
+                "remapped_cached": sum(job[7] for job in plan),
                 "legacy_revision_unrecorded": sum(job[6] for job in plan)}
     import whisperx
     from huggingface_hub import snapshot_download
@@ -152,7 +181,7 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
         model_cache_only=True,
     )
     output.mkdir(parents=True, exist_ok=True)
-    for path, identity, audio_start, audio_end, selected, _, _ in missing:
+    for path, identity, audio_start, audio_end, selected, _, _, _ in missing:
         with tempfile.TemporaryDirectory(prefix="subtitle-align-") as directory:
             audio = Path(directory) / "original.wav"
             subprocess.run([
@@ -198,6 +227,7 @@ def align(video, manifest_path, output, core_ms=60_000, dry_run=False):
                               "seconds": report["seconds"]}), flush=True)
     return {"windows": len(plan), "cached": len(plan) - len(missing),
             "aligned": len(missing),
+            "remapped_cached": sum(job[7] for job in plan),
             "legacy_revision_unrecorded": sum(job[6] for job in plan)}
 
 

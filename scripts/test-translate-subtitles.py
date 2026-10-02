@@ -208,6 +208,42 @@ class TranslationUnitTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stale"):
                 review["check_ready"](source, checkpoint)
 
+    def test_alignment_renumbering_reuses_only_identical_words_media_and_bounds(self):
+        align = runpy.run_path(str(SCRIPTS / "align-turkish.py"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, video = root / "tr.srt", root / "video"
+            source.write_text("1\n00:00:00,000 --> 00:00:01,000\nMerhaba.\n")
+            video.write_bytes(b"original video")
+            unit = align["source_data"](source)["utterances"][0]
+            previous = {**unit, "id": "old-cue-5", "cue_ids": [5]}
+            identity = "mpoyraz/wav2vec2-xls-r-300m-cv7-turkish@708639f50559d7970f462e13ec64d3f059ca89f6"
+            saved = {"source_sha256": "older-source", "utterances": [{
+                "id": previous["id"], "source_cue_ids": [5], "text": "Merhaba.",
+                "word_timings": [{"text": "Merhaba.", "start_ms": 100, "end_ms": 900}]}],
+                "input_sha256": align["alignment_input"](
+                    [previous], 0, 2000, align["digest"](video), identity)}
+            output = root / "alignment"
+            output.mkdir()
+            receipt = output / "000000000-000002000.json"
+            receipt.write_text(json.dumps(saved))
+            with patch.dict(align["align"].__globals__, {"duration_ms": lambda _: 2000}):
+                plan = align["align"](video, source, output, dry_run=True)
+                self.assertEqual((plan["cached"], plan["remapped_cached"]), (1, 1))
+                result = align["align"](video, source, output)
+                self.assertEqual(result["aligned"], 0)
+                rebound = json.loads(receipt.read_text())
+                self.assertEqual(rebound["utterances"][0]["source_cue_ids"], [1])
+                self.assertEqual(rebound["utterances"][0]["word_timings"],
+                                 saved["utterances"][0]["word_timings"])
+                self.assertEqual(rebound["reused_from_input_sha256"], saved["input_sha256"])
+                for replacement in ("Merhaba.\n", "Hayır.\n"):
+                    source.write_text("1\n00:00:00,100 --> 00:00:01,000\n" + replacement)
+                    self.assertEqual(align["align"](video, source, output, dry_run=True)["cached"], 0)
+                source.write_text("1\n00:00:00,000 --> 00:00:01,000\nMerhaba.\n")
+                video.write_bytes(b"different video")
+                self.assertEqual(align["align"](video, source, output, dry_run=True)["cached"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

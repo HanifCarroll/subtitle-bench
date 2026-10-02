@@ -24,6 +24,14 @@ def save(path, value):
 
 
 class BindGeminiReviewTest(unittest.TestCase):
+    def test_acoustic_focus_is_bounded_and_does_not_change_default_prompt(self):
+        self.assertEqual(GEMINI["independent_prompt"]({}), GEMINI["INDEPENDENT_PROMPT"])
+        focus = "Distinguish human vocal articulation from instrumental melody."
+        self.assertTrue(GEMINI["independent_prompt"]({"independent_focus": focus}).endswith(focus))
+        for value in (None, "a" * 2001):
+            with self.assertRaisesRegex(ValueError, "at most 2000 bytes"):
+                GEMINI["independent_prompt"]({"independent_focus": value})
+
     def test_prose_wrapped_single_json_fence_can_be_parsed_without_another_call(self):
         raw = 'Observation follows.\n```json\n{"label":"relevant_speech"}\n```\n'
         self.assertEqual(GEMINI["parsed_response"](raw),
@@ -119,6 +127,42 @@ class BindGeminiReviewTest(unittest.TestCase):
         save(self.receipt, provider)
         with self.assertRaisesRegex(ValueError, "incomplete or outside"):
             self.bind("short.json")
+
+    def test_combined_reviews_require_coverage_and_preserve_every_raw_response(self):
+        first = json.loads(self.receipt.read_text())
+        first["end_ms"] = 15000
+        save(self.receipt, first)
+        second_path = self.root / "provider-second.json"
+        second = {**first, "start_ms": 14000, "end_ms": 30000}
+        for stage in ("independent", "comparison"):
+            raw = self.root / f"second-{stage}.txt"
+            raw.write_text('{"label":"relevant_speech"}', encoding="utf-8")
+            second[f"{stage}_raw_response"] = str(raw)
+            second[f"{stage}_raw_sha256"] = digest(raw)
+        save(second_path, second)
+
+        def combined(name):
+            return BINDER["bind_many"](
+                [self.receipt, second_path], self.case, 10000, 20000,
+                "supported", "relevant_speech", "test reviewer",
+                "Two saved clips cover the complete source question.", self.case / name)
+
+        result = combined("combined.json")
+        self.assertEqual(2, len(result["constituent_reviews"]))
+        self.assertFalse(result["heard_original_audio"])
+        interval_hash = SOURCE["source_interval_sha256"](
+            SOURCE["READ_CUES"](self.working), 10000, 20000)
+        self.assertEqual([], SOURCE["review_result_blockers"](
+            self.case, "combined.json", 10000, 20000,
+            self.video_hash, digest(self.working), interval_hash))
+        second["start_ms"] = 16000
+        save(second_path, second)
+        with self.assertRaisesRegex(ValueError, "uncovered"):
+            combined("gap.json")
+        (self.root / "second-independent.txt").write_text("tampered", encoding="utf-8")
+        self.assertTrue(SOURCE["review_result_blockers"](
+            self.case, "combined.json", 10000, 20000,
+            self.video_hash, digest(self.working), interval_hash))
 
 
 if __name__ == "__main__":

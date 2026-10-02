@@ -199,6 +199,7 @@ def two_stage_plan(plan):
             or not isinstance(plan.get("bundles"), list)
             or not 1 <= len(plan["bundles"]) <= 3):
         raise ValueError("Use a bounded two-stage Gemini plan")
+    independent_prompt(plan)
 
     selected = []
     seen_ids = set()
@@ -233,6 +234,14 @@ def two_stage_plan(plan):
         raise ValueError("Gemini plan exceeds its approved call count")
 
     return selected, total_ms
+
+
+def independent_prompt(plan):
+    """Allow a bounded acoustic question before any candidate is supplied."""
+    focus = plan.get("independent_focus", "")
+    if not isinstance(focus, str) or len(focus.encode("utf-8")) > 2000:
+        raise ValueError("Independent acoustic focus must be text of at most 2000 bytes")
+    return INDEPENDENT_PROMPT + ("\nAcoustic focus: " + focus.strip() if focus.strip() else "")
 
 
 class EpisodeBudget:
@@ -401,6 +410,10 @@ def two_stage_review(client, plan_path, plan, selected, budget=None):
                     and saved.get("independent_provider_status") == "completed"
                     and saved.get("comparison_provider_status") == "completed"
                     and saved.get("provider_file_deleted") is True):
+                saved_prompt = Path(saved["independent_prompt"])
+                if (saved_prompt.read_text(encoding="utf-8") != independent_prompt(plan)
+                        or file_hash(saved_prompt) != saved.get("independent_prompt_sha256")):
+                    raise ValueError(f"Independent question changed at {label}")
                 continue
             if (saved.get("status") not in (
                     "independent_response_saved", "independent_complete")
@@ -416,7 +429,8 @@ def two_stage_review(client, plan_path, plan, selected, budget=None):
             prompt = Path(saved["independent_prompt"])
             if (not raw.is_file() or not prompt.is_file()
                     or file_hash(raw) != saved.get("independent_raw_sha256")
-                    or file_hash(prompt) != saved.get("independent_prompt_sha256")):
+                    or file_hash(prompt) != saved.get("independent_prompt_sha256")
+                    or prompt.read_text(encoding="utf-8") != independent_prompt(plan)):
                 raise ValueError(f"Independent response changed at {label}")
             record = saved
             record["independent_parsed"] = parsed_response(raw.read_text(encoding="utf-8"))
@@ -434,7 +448,9 @@ def two_stage_review(client, plan_path, plan, selected, budget=None):
                 "start_ms": bundle["start_ms"], "end_ms": bundle["end_ms"],
                 "clip_sha256": file_hash(audio), "status": "uploading",
                 "audio_uploads_attempted": 1,
-                "prompt_version": "two-stage-audio-v3",
+                "prompt_version": ("two-stage-audio-v3-focused"
+                                   if plan.get("independent_focus", "").strip()
+                                   else "two-stage-audio-v3"),
                 "settings": {"generation_config": (
                     {"max_output_tokens": plan["max_output_tokens"]}
                     if "max_output_tokens" in plan else "provider_default")},
@@ -457,7 +473,7 @@ def two_stage_review(client, plan_path, plan, selected, budget=None):
 
         try:
             for stage in stages:
-                prompt = INDEPENDENT_PROMPT if stage == "independent" else (
+                prompt = independent_prompt(plan) if stage == "independent" else (
                     COMPARISON_PROMPT + "\n" + json.dumps({
                         "independent_observation": record["independent_output"],
                         "candidate_timeline": bundle["timeline"],

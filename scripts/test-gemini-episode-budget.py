@@ -147,6 +147,14 @@ class GeminiEpisodeBudgetTest(unittest.TestCase):
         self.assertEqual(1, len(self.client.interactions.calls))
         self.assertEqual(1, len(self.client.files.deletions))
 
+    def test_changed_acoustic_question_cannot_reuse_completed_review(self):
+        path, plan, selected, budget = self.run_plan("focus")
+        plan["independent_focus"] = "Distinguish vocal articulation from instrumental melody."
+        with self.assertRaisesRegex(ValueError, "Independent question changed"):
+            SCRIPT["two_stage_review"](self.client, path, plan, selected, budget)
+        self.assertEqual(1, len(self.client.files.uploads))
+        self.assertEqual(2, len(self.client.interactions.calls))
+
     def test_cost_cap_stops_before_the_model_call(self):
         self.auth["aggregate_hard_limits"]["estimated_charge_usd"] = 0.0001
         write_json(self.auth_path, self.auth)
