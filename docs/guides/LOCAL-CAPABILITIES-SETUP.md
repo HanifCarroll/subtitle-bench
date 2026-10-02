@@ -1,12 +1,12 @@
 # Local acoustic environments and operations
 
-The [October 2 comparison](../reports/LOCAL-CAPABILITY-EXPANSION-2026-10-02.md) records executed model revisions, disk requirements, controls, and decisions. FireRed is targeted activity evidence. Qwen 8-bit is retained as a targeted operational reliability option: reduced looping at modest extra memory, with no established recovery of important outstanding meanings. The CTC scorer failed calibration and remains experimental. Other installed configurations are diagnostic, not production defaults. The completed comparison is closed; preserve its outputs, environments, and caches. SAM Small is the sole remaining experiment and is stopped while authorized local access is unavailable.
+The [October 2 comparison](../reports/LOCAL-CAPABILITY-EXPANSION-2026-10-02.md) records executed model revisions, disk requirements, controls, and decisions. FireRed is targeted activity evidence. Qwen 8-bit is retained as a targeted operational reliability option: reduced looping at modest extra memory, with no established recovery of important outstanding meanings. The CTC scorer failed calibration and remains experimental. Other installed configurations are diagnostic, not production defaults. The completed comparison and public SAM MLX follow-up are closed; preserve their outputs, environments, and caches. SAM MLX ran with complete pretrained weights, but is rejected for production word recovery. The official reference route remains untested.
 
 All environments and models stay outside Git. Reuse an existing matching environment; reconstruct in a new directory when versions differ. Never recreate or upgrade a known-working environment in place. Full resolved package lists and private test drivers were saved with the experiment. These equivalent reconstruction commands pin tested top-level packages; a changed dependency resolution is a new configuration.
 
 ## Environments
 
-Base: `~/.local/share/subtitle-bench/`. The four new environments use Python 3.11.14; preserved `env-mlx` uses 3.14.5.
+Base: `~/.local/share/subtitle-bench/`. The initial four new environments and the later SAM environment use Python 3.11.14; preserved `env-mlx` uses 3.14.5.
 
 | Environment | Tested packages | Purpose / allocated size |
 |---|---|---|
@@ -16,6 +16,7 @@ Base: `~/.local/share/subtitle-bench/`. The four new environments use Python 3.1
 | `env-vlm` | mlx-vlm 0.7.4, mlx-audio 0.5.7, MLX 0.32.3, transformers 5.18.0 | Gemma/Omni/VibeVoice; 0.585 GiB |
 | `env-separator` | audio-separator 0.47.0, torch 2.14.1, torchvision 0.29.1, onnxruntime 1.30.0 | BS-RoFormer, MPS; 1.034 GiB |
 | `env-ctc` | omnilingual-asr 0.2.0, fairseq2/fairseq2n 0.6, torch/torchaudio 2.8.0, transformers 5.18.0, numpy 1.26.4 | Native CTC, scorer, conversion; 1.095 GiB |
+| `env-sam-mlx` | mlx-audio 0.5.7 at `94c7716212b2228f178d2f9c7619a591fd1b0b78`, MLX/Metal 0.32.3, transformers 5.18.0, huggingface-hub 1.33.0, numpy 2.4.6, scipy 1.17.1, sentencepiece 0.2.2, soundfile 0.13.1 | Public SAM MLX/DACVAE and T5, offline inference; 0.433 GiB |
 
 Demucs retains its existing `source-separation-2026-09-27/.venv` in the private media workspace. FFmpeg 8.1.2 and whisper.cpp 1.9.1 remain system tools.
 
@@ -60,13 +61,71 @@ RoFormer file/config: `$bench_tools/models/roformer/model_bs_roformer_ep_317_sdr
 
 Turkish Whisper conversion uses whisper.cpp 1.9.1 source `f049fff95a089aa9969deb009cdd4892b3e74916`, `models/convert-h5-to-ggml.py`, the pinned fine-tune snapshot, and mel assets from OpenAI Whisper `86098128c0b4f24f0e2aa2994de830614b474227`. The converter's default is FP16. Output: `$bench_tools/models/whisper-turkish/ggml-model.bin`, 1.625 GB in addition to 3.240 GB downloaded. Matched original/fine-tuned decoding uses fresh whisper.cpp processes, four threads, beam/best-of five, temperature zero and identical default fallback; raw full JSON/SRT remain private.
 
-About 31.74 GB of new model/build artifacts were retained. Environments, source checkouts, clips, results, and backups need additional disk. Existing Omni/Qwen/aligner caches were reused. Do not delete caches or large files to make space without permission.
+The initial screen retained about 31.74 GB of new model/build artifacts; the SAM follow-up adds 3.303 GB. Environments, source checkouts, clips, results, and backups need additional disk. Existing Omni/Qwen/aligner caches were reused. Do not delete caches or large files to make space without permission.
 
-SAM's October 2 follow-up checked the official pinned `checkpoint.pt` with a HEAD request: HTTP `401 GatedRepo`, manual gate, no locally configured Hugging Face credential. Web-account acceptance/approval cannot be inferred from that result. No SAM weights or runtime were installed and no inference started. Do not fill this access wait with other model reruns.
+## SAM Small public MLX follow-up
 
-SAM action: sign in at [facebook/sam-audio-small](https://huggingface.co/facebook/sam-audio-small), personally review/accept the SAM license/contact-sharing terms, request access and wait for approval, then run `~/.local/share/subtitle-bench/env-vlm/bin/hf auth login` locally with a read-capable token for the approved account. If acceptance/approval are already complete, only local authentication is needed. Never paste the token into chat. The agent must not accept conditions or use a public conversion to bypass the original model gate.
+The original October 2 HEAD check returned `401 GatedRepo` for official weights. Preserve that historical receipt. The user subsequently authorized the public redistribution; approval of the original repository is **not** a blanket prerequisite for it. No protected repository or acceptance/contact-sharing form was used. A future official-reference test would separately require personal acceptance/access approval at [facebook/sam-audio-small](https://huggingface.co/facebook/sam-audio-small), then local authentication for that approved account. Never supply credentials in chat or use another person's account.
 
-After authorized access is verified, use **Small explicitly**; generic upstream examples name a larger model. Start with one short audio-path smoke. Reuse the exact original opening (0–30 s), song (565–605 s), late music (4128–4168 s), and cafe control (300–318 s), including its supported brief reply. Use neutral sound descriptions and documented temporal anchors where useful; never supply desired Turkish wording. Preserve original, target, and residual, recording conversions and timing explicitly. Reuse matched recognizer baselines and settings, measure time/memory, and freeze outputs before judging words. Add only a small prompting comparison when a specific target ambiguity warrants it. Any useful recovery proceeds through the existing source/timing/direct-agent-English/export route in a separate development copy; no recovery means recording that limit, not manufacturing a repair. No full episode or broader model search follows automatically.
+The [conversion card](https://huggingface.co/mlx-community/sam-audio-small/tree/4ca84acc5c47f64bb2acee448f835dfac65ed318) names Meta Small and mlx-audio 0.2.10, but does not pin its original base-weight revision. Its README's official-repository example must not be copied unchanged. Use the community snapshot/local path explicitly. The [SAM license](https://github.com/facebookresearch/sam-audio/blob/bb4c6999d2677c7402360e426afc01ddfad6dce0/LICENSE) still governs use and redistribution: keep the full agreement, supply it with redistributed materials, acknowledge SAM in published research, and retain its restrictions. The report acknowledges SAM Materials; the complete license and provenance are retained privately and beside the local model. Public availability does not waive these conditions.
+
+For a **new isolated environment only**, reconstruct the tested runtime:
+
+```sh
+uv venv --python 3.11.14 "$bench_tools/env-sam-mlx"
+uv pip install --python "$bench_tools/env-sam-mlx/bin/python" \
+  'mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@94c7716212b2228f178d2f9c7619a591fd1b0b78' \
+  'mlx==0.32.3' 'transformers==5.18.0' 'huggingface-hub==1.33.0' \
+  'numpy==2.4.6' 'scipy==1.17.1' 'sentencepiece==0.2.2' 'soundfile==0.13.1'
+```
+
+Download only these public pinned dependencies; no original Meta weights, judge, visual encoder, or automatic span predictor is required by the executed text-only path. This is not the complete reference SAM feature set. The resolved package lock remains with the private execution records.
+
+```sh
+"$bench_tools/env-sam-mlx/bin/python" - <<'PY'
+from pathlib import Path
+from urllib.request import urlopen
+from huggingface_hub import snapshot_download
+sam_path = snapshot_download(
+    "mlx-community/sam-audio-small", token=False,
+    revision="4ca84acc5c47f64bb2acee448f835dfac65ed318",
+    allow_patterns=["config.json", "model.safetensors", "model.safetensors.index.json", "README.md"])
+t5_path = snapshot_download(
+    "google-t5/t5-base", token=False,
+    revision="a9723ea7f1b39c1eae772870f3b547bf6ef7e6c1",
+    allow_patterns=["config.json", "model.safetensors", "tokenizer.json", "spiece.model", "README.md"])
+license_url = "https://raw.githubusercontent.com/facebookresearch/sam-audio/bb4c6999d2677c7402360e426afc01ddfad6dce0/LICENSE"
+with urlopen(license_url, timeout=30) as response:
+    Path(sam_path, "SAM-LICENSE.txt").write_bytes(response.read())
+print(sam_path)
+print(t5_path)
+PY
+```
+
+Snapshots add about 3.303 GB: 2.409 GB SAM and 0.894 GB T5, including T5's unused decoder. Verify the report's weight/license hashes. Existing caches and working environments remain intact; no larger SAM variant is installed.
+
+The ordinary upstream loader can swallow loading exceptions or permit missing parameters. `separate-audio-mlx.py` instead instantiates explicit local configs, checks every key/shape, uses strict base loading, and compares every loaded parameter with its checkpoint. This conversion passes with 555 SAM/DACVAE and 99 T5 encoder parameters. The T5 decoder/head are intentionally outside the executed path. Tokenizer/processor load locally; finite prompt features and exact runtime audio reception are checked before separation. Missing/failed/random weights stop execution and must not be classified as bad model quality.
+
+```sh
+sam_snapshot="$HOME/.cache/huggingface/hub/models--mlx-community--sam-audio-small/snapshots/4ca84acc5c47f64bb2acee448f835dfac65ed318"
+t5_snapshot="$HOME/.cache/huggingface/hub/models--google-t5--t5-base/snapshots/a9723ea7f1b39c1eae772870f3b547bf6ef7e6c1"
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  "$bench_tools/env-sam-mlx/bin/python" scripts/separate-audio-mlx.py \
+  /private/frozen.original.wav /private/new-sam-output \
+  --model-dir "$sam_snapshot" --text-encoder-dir "$t5_snapshot" \
+  --model-revision 4ca84acc5c47f64bb2acee448f835dfac65ed318 \
+  --text-encoder-revision a9723ea7f1b39c1eae772870f3b547bf6ef7e6c1 \
+  --description speech --video-sha256 ORIGINAL_VIDEO_SHA256 \
+  --start-ms 300000 --end-ms 318000
+```
+
+The operation requires a new output directory. It preserves a mono 48 kHz float original and both raw/aligned target/residual views, with hashes, conversions, checkpoint audit, runtime, and memory. Only codec end padding is removed; keep existing extraction/audio offsets when mapping back to the video. It uses 10 s chunks/3 s overlap, seed 42, midpoint ODE/16 steps, and 50-frame decoding. **It applies no temporal anchors:** the upstream chunk loop ignores them, and this operation exposes no anchor option. The single-pass smoke also used no substantive anchor.
+
+The executed smoke was the fixed 1.380 s reply; the four matched intervals were opening 0–30 s, song 565–605 s, late music 4128–4168 s, and cafe 300–318 s. Descriptions were `speech`, with `singing` for the song. The original stereo 44.1 kHz files remain intact. SAM's resampler is the pinned runtime's Kaiser polyphase implementation; ASR copies use FFmpeg 8.1.2 mono 16 kHz PCM16. No desired Turkish words or reference text entered generation. Freeze separation/recognizer outputs before any comparison.
+
+Reuse original/Demucs/RoFormer Whisper results with identical four-interval settings: large-v3, fresh processes, four threads, beam/best-of five, temperature zero, same fallback. Qwen uses preserved mlx-audio 0.5.6, 4-bit, temperature zero, 512 tokens, batch one, no context, and at-most-30-second inputs. Reuse bounded originals; do not treat earlier 40 s separator-Qwen outputs as complete tail evidence. The only required new original recognition was the standalone reply, because no matching baseline existed. Token exhaustion remains unusable.
+
+The matched run took 146.434 s for 127.979 s audio, with 5.755–5.771 GiB MLX peak. Contextual cafe separation preserves the supported reply, but isolated-reply separation changes a correct Whisper control. Masked words remain unsupported. This specific conversion/runtime is rejected for production word recovery; the reference implementation has no quality verdict. No useful recovery justified a new source/timing/direct-agent-English/export copy, prompt search, larger model, full episode, or broader capability search.
 
 ## FireRed and existing scene review
 
@@ -120,4 +179,4 @@ The frozen 8-bit comparison avoided two observed 4-bit loops at 3.659 versus 2.8
 
 ## Checks
 
-Run `python3 scripts/test-local-acoustic-evidence.py` without model environments for event identity/type/probability, CTC-path calculation, and Qwen token/window regressions. Run the complete [README suite](../../README.md#portable-checks) before committing an integration. Synthetic checks do not establish hearing accuracy; raw smoke/control results and scene-production evidence remain the basis for classification.
+Run `python3 scripts/test-local-acoustic-evidence.py` without model environments for event identity/type/probability, CTC-path calculation, Qwen token/window regressions, and rejection of missing/extra/wrong-shaped pretrained weights. Run the complete [README suite](../../README.md#portable-checks) before committing an integration. Synthetic checks do not establish hearing accuracy; raw smoke/control results and scene-production evidence remain the basis for classification.

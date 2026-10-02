@@ -14,9 +14,22 @@ EVENTS = runpy.run_path(str(Path(__file__).with_name("audio-event-map.py")))
 SOURCE = EVENTS["SOURCE"]
 CTC = runpy.run_path(str(Path(__file__).with_name("candidate-acoustic-score.py")))
 WORKBENCH = runpy.run_path(str(Path(__file__).with_name("subtitle-workbench.py")))
+SEPARATE = runpy.run_path(str(Path(__file__).with_name("separate-audio-mlx.py")))
 
 
 def main():
+    # 0. Missing, extra, and wrong-shaped weights must stop before inference.
+    parameters = {"codec": Namespace(shape=(2, 3)), "text": Namespace(shape=(4,))}
+    SEPARATE["require_complete_weights"](parameters, parameters.copy())
+    for weights in [{"codec": parameters["codec"]},
+                    {**parameters, "unknown": Namespace(shape=(1,))},
+                    {**parameters, "text": Namespace(shape=(3,))}]:
+        try:
+            SEPARATE["require_complete_weights"](parameters, weights)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Incomplete pretrained model could run with defaults")
     # 1. Check the CTC dynamic program against exhaustive path probabilities.
     probabilities = [[0.5, 0.3, 0.2], [0.2, 0.5, 0.3], [0.4, 0.2, 0.4]]
     log_probs = [[math.log(v) for v in frame] for frame in probabilities]
