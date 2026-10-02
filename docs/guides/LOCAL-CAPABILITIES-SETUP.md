@@ -1,6 +1,6 @@
 # Local acoustic environments and operations
 
-The [October 2 comparison](../reports/LOCAL-CAPABILITY-EXPANSION-2026-10-02.md) records executed model revisions, disk requirements, controls, and decisions. FireRed is targeted activity evidence. The CTC scorer failed calibration and remains experimental. The other installed configurations are diagnostic, not production defaults. SAM is blocked pending manual access acceptance.
+The [October 2 comparison](../reports/LOCAL-CAPABILITY-EXPANSION-2026-10-02.md) records executed model revisions, disk requirements, controls, and decisions. FireRed is targeted activity evidence. Qwen 8-bit is retained as a targeted operational reliability option: reduced looping at modest extra memory, with no established recovery of important outstanding meanings. The CTC scorer failed calibration and remains experimental. Other installed configurations are diagnostic, not production defaults. The completed comparison is closed; preserve its outputs, environments, and caches. SAM Small is the sole remaining experiment and is stopped while authorized local access is unavailable.
 
 All environments and models stay outside Git. Reuse an existing matching environment; reconstruct in a new directory when versions differ. Never recreate or upgrade a known-working environment in place. Full resolved package lists and private test drivers were saved with the experiment. These equivalent reconstruction commands pin tested top-level packages; a changed dependency resolution is a new configuration.
 
@@ -62,7 +62,11 @@ Turkish Whisper conversion uses whisper.cpp 1.9.1 source `f049fff95a089aa9969deb
 
 About 31.74 GB of new model/build artifacts were retained. Environments, source checkouts, clips, results, and backups need additional disk. Existing Omni/Qwen/aligner caches were reused. Do not delete caches or large files to make space without permission.
 
-SAM action: sign in at [facebook/sam-audio-small](https://huggingface.co/facebook/sam-audio-small), review/accept the SAM license/contact-sharing terms, request access and wait for approval, then authenticate locally with `hf auth login`. Never paste the token into chat. Public MLX conversions are not an access-control workaround. No SAM weights were downloaded.
+SAM's October 2 follow-up checked the official pinned `checkpoint.pt` with a HEAD request: HTTP `401 GatedRepo`, manual gate, no locally configured Hugging Face credential. Web-account acceptance/approval cannot be inferred from that result. No SAM weights or runtime were installed and no inference started. Do not fill this access wait with other model reruns.
+
+SAM action: sign in at [facebook/sam-audio-small](https://huggingface.co/facebook/sam-audio-small), personally review/accept the SAM license/contact-sharing terms, request access and wait for approval, then run `~/.local/share/subtitle-bench/env-vlm/bin/hf auth login` locally with a read-capable token for the approved account. If acceptance/approval are already complete, only local authentication is needed. Never paste the token into chat. The agent must not accept conditions or use a public conversion to bypass the original model gate.
+
+After authorized access is verified, use **Small explicitly**; generic upstream examples name a larger model. Start with one short audio-path smoke. Reuse the exact original opening (0–30 s), song (565–605 s), late music (4128–4168 s), and cafe control (300–318 s), including its supported brief reply. Use neutral sound descriptions and documented temporal anchors where useful; never supply desired Turkish wording. Preserve original, target, and residual, recording conversions and timing explicitly. Reuse matched recognizer baselines and settings, measure time/memory, and freeze outputs before judging words. Add only a small prompting comparison when a specific target ambiguity warrants it. Any useful recovery proceeds through the existing source/timing/direct-agent-English/export route in a separate development copy; no recovery means recording that limit, not manufacturing a repair. No full episode or broader model search follows automatically.
 
 ## FireRed and existing scene review
 
@@ -111,6 +115,8 @@ Gemma/Omni use MLX-VLM 0.7.4 `load`, `apply_chat_template(..., num_audios=1)`, a
 VibeVoice uses the pinned **long-form** ASR through mlx-audio 0.5.7, temperature zero, 2,048 tokens, prefill step 1,024, no context/hotwords. Input is resampled internally to 24 kHz. Loading the pinned local snapshot avoids the observed direct-id metadata-file fetch failure. Raw structured JSON precedes parsed turns; speaker labels remain proposals.
 
 Qwen precision comparison uses preserved mlx-audio 0.5.6, identical at-most-30-second originals, temperature zero, 512 tokens, batch size one, no context; classroom language is automatic and others Turkish. The runtime shares a token budget across internal chunks, so a loop can leave a longer input's tail unprocessed. Workbench `audio-check` now allows 10–30-second windows and records actual generated-token counts. Token exhaustion is unusable even when text looks short.
+
+The frozen 8-bit comparison avoided two observed 4-bit loops at 3.659 versus 2.858 GiB MLX peak memory (about 0.80 GiB extra). Retain that robustness benefit for targeted use with the same guards. It does not establish an accuracy breakthrough, resolve the important outstanding meanings, or justify another benchmark/full production run. Preserve the measured outputs; no new inference is needed to apply this classification refinement.
 
 ## Checks
 

@@ -1,8 +1,10 @@
 # Local acoustic capability comparison — October 2, 2026
 
-**Decision: the tested expansion does not justify another full local-only production run.** FireRed adds useful targeted speech/music/singing routing. No new configuration establishes a reliable recovery of the meaning-changing words, brief replies, language switches, or masked speech that held E041. SAM Audio Small remains access-blocked; its potential is unknown.
+**Decision: the tested expansion does not justify another full local-only production run.** FireRed adds useful targeted speech/music/singing routing. Qwen 8-bit demonstrated reduced looping at about 0.80 GiB extra MLX peak memory; that operational benefit is retained separately from word accuracy. No new configuration establishes a reliable recovery of the meaning-changing words, brief replies, language switches, or masked speech that held E041. SAM Audio Small remains access-blocked; its potential is unknown.
 
 This executes the [authoritative expansion plan](../guides/LOCAL-CAPABILITY-EXPANSION-PLAN.md) at starting revision `cef34db`. All feasible requested capability families were tested, including both Omnilingual sizes and the optional Turkish Whisper checkpoint. No hosted inference, full E041 production attempt, training campaign, or playback installation was performed. Existing caches and large files were retained.
+
+The pushed comparison was reviewed and the completed capability tests are closed. Their outputs, baselines, environments, and caches are preserved. The Qwen 8-bit classification below is a refinement of the existing frozen results, not another benchmark. SAM Audio Small is the only pending experiment; its follow-up access check is recorded below. No other model tests or full episode run were started during this follow-up.
 
 ## Comparison conditions and limits
 
@@ -36,13 +38,13 @@ Decisions concern these exact model/runtime configurations, not every possible i
 
 | Capability | Evidence and effect on controls | Classification |
 |---|---|---|
-| Qwen3-ASR 8-bit | Avoids two 4-bit loops; improves some spellings and the cafe reply relative to 4-bit. Those words were already available in baseline Whisper. Important guard/classroom/mafia/police wording remains unsettled; music still receives unsupported phrases. | Reject as precision upgrade |
+| Qwen3-ASR 8-bit | Avoids two observed 4-bit loops at 3.659 versus 2.858 GiB MLX peak memory. Some spellings and the cafe reply improve relative to 4-bit, but those words were already available in baseline Whisper. Important guard/classroom/mafia/police wording remains unsettled; music still receives unsupported phrases. | Targeted-only, loop robustness; no established new word recovery |
 | Qwen3-ASR BF16 | Similar unresolved meanings, more memory, and slower inference. Removing a loop does not establish the replacement words. | Reject as precision upgrade |
 | FireRed AED + VAD | Adds simultaneous speech/singing/music observations and directs music cases away from ordinary dialogue recovery. Detects the short reply, but ends its event 290 ms before the supported cue ends. No words are deleted or trimmed. Does not distinguish multiple speakers. | Targeted-only, activity routing |
 | Gemma 4 E4B audio | Audio-capable configuration receives actual WAV input through the documented template. The required smoke battery fails overall: clear Turkish is meaningful but imperfect, music produces invented singing language, and the short reply is wrong. The broader 17-input diagnostic screen does not cure this. | Reject; no integration |
 | Gemma 4 E2B audio | The same three smoke inputs fail: music is missed and the short reply is wrong. | Reject; no integration |
 | Qwen3-Omni 30B-A3B 4-bit | Default template produces special-token corruption. A documented assistant prefill improves that failure, but invents/repeats words on the short reply and changes controls. Music descriptions are sometimes useful; guard/classroom/mafia words remain unreliable. Memory/swap cost is excessive for this evidence quality. | Reject |
-| SAM Audio Small | Original checkpoint requires manual license/access acceptance. Public MLX conversions were inspected but not used to bypass it. No fair inference test was possible. | Blocked, access agreement |
+| SAM Audio Small | Original checkpoint requires manual license/access acceptance. The follow-up weight-access check returned `401 GatedRepo`; no local credential is configured. Public MLX conversions were not used to bypass the gate. No fair inference test was possible. | Blocked, authorized local access unavailable |
 | BS-RoFormer Viperx 1297 | Runs on MPS. Original/vocal/residual comparisons add alternative hallucinations, not established new words. Whisper loses the supported cafe reply on its vocal stem, while original and matched Demucs retain it. | Reject |
 | VibeVoice-ASR 4-bit | Correct long-form multilingual checkpoint, no hotwords/context. Structured turns and music labels work, but a supported cafe negation becomes obligation; ordinary/name controls change. | Reject |
 | Omnilingual CTC 300M v2 | CPU inference works. Different phonetic decoding still joins/substitutes words and drops replies; no new meaning-changing decision becomes supportable. | Reject for production recovery |
@@ -51,6 +53,8 @@ Decisions concern these exact model/runtime configurations, not every possible i
 | Turkish wav2vec2/CTC scorer | Blind decode and forced-path scores are preserved separately. It can beat an obviously wrong candidate, yet prefers an incomplete/wrong short form under crop changes and harmful negation over supported wording. Music/blank dilution can make a wrong phrase score deceptively well. | Reject production scoring; retain experimental tool |
 
 The existing Qwen 4-bit, Silero, Whisper, aligner, and HTDemucs remain baseline evidence tools; this screen does not newly qualify them as word judges.
+
+Retain 8-bit as an optional bounded Qwen configuration for loop-prone clips, with the same window/token guards and unchanged standards for acoustic support. It is an operational reliability option, not a default accuracy upgrade or a reason to reopen the completed comparison. BF16 remains rejected as a precision upgrade.
 
 ### Qwen runner finding
 
@@ -129,7 +133,11 @@ The official [Omnilingual repository](https://github.com/facebookresearch/omnili
 
 ### SAM access action
 
-Sign in to Hugging Face, open [SAM Audio Small](https://huggingface.co/facebook/sam-audio-small), review and accept its SAM license/contact-sharing terms, request access, and wait for approval if required. Then authenticate locally with `hf auth login` using a read-capable token for that account; never paste the token into chat. Access must authorize the original model before using a conversion. No acceptance was made for the user. This blocker was raised during execution; independent tests continued. SAM remains an untested hypothesis, not a rejected acoustic result.
+The October 2 follow-up at 15:36 UTC checked the original pinned repository and issued a HEAD request for `checkpoint.pt`. Repository metadata still reports a manual gate; weight access returned HTTP `401` with `GatedRepo`. No Hugging Face credential is configured locally. This establishes unavailable local access, not whether the user's web account has already accepted the conditions. No weights were downloaded, no runtime was installed, and no inference or replacement benchmark was started. The pending SAM experiment is stopped at this access boundary.
+
+Sign in to Hugging Face, open [SAM Audio Small](https://huggingface.co/facebook/sam-audio-small), personally review and accept its SAM license/contact-sharing terms, request access, and wait for approval if required. Then authenticate locally with `~/.local/share/subtitle-bench/env-vlm/bin/hf auth login` using a read-capable token for the approved account; never paste the token into chat. If acceptance and approval are already complete, only local authentication is needed. Access must authorize the original model before using a conversion. No acceptance was made for the user. SAM remains an untested hypothesis, not a rejected acoustic result.
+
+Once authorized access is available, the remaining experiment is one short audio-path smoke followed by Small on the exact original opening (0–30 s), song (565–605 s), late-music (4128–4168 s), and cafe control (300–318 s) intervals already compared with Demucs and RoFormer. Keep neutral sound descriptions, explicit timing/sample-rate conversions, original/target/residual views, and matched recognizer settings; reuse existing matching baseline outputs. A small prompting comparison is justified only by a specific target ambiguity. Carry an established recovery through a separate development source/timing/English/export copy; otherwise retain an unsettled or negative result. No larger SAM variant, parameter search, other capability search, or full episode run is authorized by this follow-up.
 
 ## Scene-level production evidence
 
@@ -150,21 +158,25 @@ This is a bounded recovery policy for a future explicitly selected episode. The 
 1. Freeze media/settings. Use existing Whisper large-v3-turbo isolated fresh processes with the current 300-second cores/five-second overlap; preserve raw output and joining receipts.
 2. Prepare the existing source case; inspect Silero coverage and recognizer defects. Use scene bundles and timestamped visual context when a referent/speaker matters.
 3. For music, masked activity, or a possible short-reply gap, add **FireRed AED** on the original bounded clip. Labels direct investigation; they never approve words, absence of speech, deletion, or automatic cue trimming.
-4. Recover disputed wording with focused Whisper large-v3 and existing Qwen3-ASR 4-bit on original clips of at most 30 seconds. Preserve raw/token completion evidence; use multilingual-compatible language selection for language switches. Expand surrounding context through additional bounded clips rather than hiding a tail behind one token budget.
+4. Investigate disputed wording with focused Whisper large-v3 and existing Qwen3-ASR on original clips of at most 30 seconds. Keep 4-bit as the baseline and retain 8-bit as an optional loop-robustness configuration at modest extra memory, without treating changed wording as a proven recovery. Preserve raw/token completion evidence; use multilingual-compatible language selection for language switches. Expand surrounding context through additional bounded clips rather than hiding a tail behind one token budget.
 5. For genuinely masked material, optionally compare existing HTDemucs vocal/residual views using the same recognizer settings and interval. Retain the original. Do not add rejected RoFormer/audio-language/alternative-ASR/scoring configurations as routine fallbacks.
 6. Record supported source decisions. If an important acoustic question remains unsupported, retain uncertainty and stop at incomplete Turkish; do not clear a queue by assertion. Finish batched Turkish timing with the existing aligner before source readiness.
 7. Only after substantive Turkish readiness: direct-agent English, every-unit contextual semantic review, separate linked layouts, focused and whole-candidate checks, sampled rendering, and existing dry release review. Installation and native playback remain separate authorized work.
 
-**Now manageable:** locating music/singing/speech mixtures for investigation; preserving supported ordinary dialogue and replies through the existing downstream route; preventing the Qwen multi-chunk/token-budget coverage mistake. Those are routing, preservation, and software improvements.
+**Now manageable:** locating music/singing/speech mixtures for investigation; preserving supported ordinary dialogue and replies through the existing downstream route; preventing the Qwen multi-chunk/token-budget coverage mistake; and retaining 8-bit's observed loop robustness at modest extra memory. Those are routing, preservation, and operational improvements, not established recovery of outstanding meanings.
 
 **Still unsupported:** exact ordinary battery/guard/police words, some mafia continuations/negation, foreign-language classroom turns, and music-masked words/lyrics. Credible music-event descriptions still do not provide a trustworthy local exact-word/silence adjudicator. There is no demonstrated new lexical failure class that warrants a full run. SAM could change the masking result, but cannot be assumed to do so.
 
-No reliable full-run runtime estimate follows from fast acoustic kernels while source questions still fail. The next useful experiment, if separately requested after SAM access, is the same masked clips and controls. Longer-term adaptation is only a feasibility direction: independently supported clean passages, episode-separated training/evaluation, and no raw OpenSubtitles-as-truth training. No training was implemented.
+**Recommendation:** retain the Whisper-led source-first stack, bounded Qwen with its window/token guards and optional 8-bit loop robustness, and targeted FireRed activity routing. These improve operational reliability and routing; actual new recovery of the important outstanding words remains unestablished. Preserve unresolved source questions and the stopped SAM Small experiment; another full local-only episode run is not justified.
+
+No reliable full-run runtime estimate follows from fast acoustic kernels while source questions still fail. The only remaining expansion experiment is the authorized matched SAM Small test after local access is available; it is stopped while access is unavailable. Longer-term adaptation remains a feasibility note, not active work: independently supported clean passages, episode-separated training/evaluation, and no raw OpenSubtitles-as-truth training. No training was implemented.
 
 ## Reusable changes and verification
 
 Two small operations were added: `audio-event-map.py` for typed FireRed observations and `candidate-acoustic-score.py` for the explicitly requested rejected experiment. The existing source-review adapter validates media/receipt/frame identities and preserves event kinds. Event labels do not become transcript gap text. The workbench Qwen window/token guard and actual Whisper model labeling have portable regressions.
 
 Focused acoustic-input, event mapping, source-review, saved-scene, and evidence-label checks passed during implementation. All 19 README portable checks passed, as did Python compilation and diff whitespace checks. A real FireRed smoke also verified absolute evidence paths when given a relative output. Final results are saved with execution evidence. Synthetic checks verify calculation, parsing, binding, and unsafe automatic behavior—not every Turkish word. No held-out content was inspected or qualification restarted.
+
+The access/classification follow-up changes documentation only. Local documentation links and whitespace were checked; all 917 completed evidence artifacts still match the final freeze. Implementation hashes still match the completed 19-check suite. No capability inference was repeated, and no new runtime, model, or scene repair was produced while SAM access was unavailable.
 
 Private evidence lives in `~/Movies/Leyla ile Mecnun/Workflow/pilots/local-capability-expansion-041-2026-10-02`: frozen manifests, baseline hashes, model/runtime inventory, raw observations/stems, scorer calibration, authored per-case judgments, and scene review/export/render receipts. None of that media, subtitle text, or model output is committed. The public report records conclusions without protected excerpts.
