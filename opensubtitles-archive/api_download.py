@@ -7,7 +7,6 @@ import json
 import os
 import stat
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -25,9 +24,8 @@ INVENTORY = ROOT / "api-inventory.json"
 ENV_FILE = ROOT / ".env"
 DOWNLOAD_URL = "https://api.opensubtitles.com/api/v1/download"
 MAX_DOWNLOADS = 20
+MAX_FAILED_FILES = 3
 LOGIN_URL = "https://api.opensubtitles.com/api/v1/login"
-# These September 27 transfers failed; retry them after the other pending files.
-DEFERRED_IDS = {8658872, 8661745, 8661763}
 
 
 def account_credentials():
@@ -76,6 +74,58 @@ def login(username, password, api_key):
 
 def overall_episode(season, episode):
     return {1: 0, 2: 20, 3: 61}[season] + episode
+
+
+def ordered_candidates(entries, listings, existing):
+    saved_tracks = {
+        (int(row["overall_episode"]), row["language"])
+        for row in existing if row["download_status"] == "saved"
+    }
+    saved_ids = {
+        row["opensubtitles_id"]
+        for row in existing if row["download_status"] == "saved"
+    }
+    pending_ids = {
+        row["opensubtitles_id"]
+        for row in listings
+        if row["archive_status"] == "not_downloaded"
+        and row["opensubtitles_id"] not in saved_ids
+    }
+    candidates = []
+    for entry in entries:
+        attributes = entry["attributes"]
+        legacy_id = str(attributes.get("legacy_subtitle_id") or "")
+        if legacy_id not in pending_ids or attributes["language"] not in ("en", "tr"):
+            continue
+
+        feature = attributes["feature_details"]
+        number = overall_episode(feature["season_number"], feature["episode_number"])
+        if not 1 <= number <= 104:
+            continue
+
+        other_language = "tr" if attributes["language"] == "en" else "en"
+        completes_pair = (number, other_language) in saved_tracks
+        candidates.append((not completes_pair, number, attributes["language"], entry))
+
+    candidates.sort(key=lambda item: item[:3])
+    return [(number, entry) for _, number, _, entry in candidates]
+
+
+def save_index(listings, fieldnames):
+    with INDEX.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(listings)
+
+
+def record_failure(listings, fieldnames, legacy_id, reason):
+    for listing in listings:
+        if listing["opensubtitles_id"] == str(legacy_id):
+            listing["last_download_error"] = reason
+            break
+
+    save_index(listings, fieldnames)
+    print(f"Skipped {legacy_id}: {reason}", flush=True)
 
 
 def download_link(api_key, token, file_id):
@@ -132,23 +182,12 @@ def main():
         index_fields = reader.fieldnames
         listings = list(reader)
 
-    saved_ids = {int(row["opensubtitles_id"]) for row in existing if row["download_status"] == "saved"}
-    candidates = []
-    for entry in entries:
-        attributes = entry["attributes"]
-        feature = attributes["feature_details"]
-        legacy_id = attributes.get("legacy_subtitle_id")
-        if not legacy_id or int(legacy_id) in saved_ids or str(legacy_id) in sys.argv[1:]:
-            continue
+    if "last_download_error" not in index_fields:
+        index_fields.append("last_download_error")
+        for listing in listings:
+            listing["last_download_error"] = ""
 
-        candidates.append((
-            1 if int(legacy_id) in DEFERRED_IDS else 0,
-            0 if attributes["language"] == "en" else 1,
-            overall_episode(feature["season_number"], feature["episode_number"]),
-            entry,
-        ))
-
-    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    candidates = ordered_candidates(entries, listings, existing)
     username, password, api_key = account_credentials()
     try:
         token = login(username, password, api_key)
@@ -159,9 +198,10 @@ def main():
         print(f"OpenSubtitles login failed: {type(error).__name__}")
         return
     downloaded = 0
+    failed_files = 0
 
-    for _, _, number, entry in candidates:
-        if downloaded >= MAX_DOWNLOADS:
+    for number, entry in candidates:
+        if downloaded >= MAX_DOWNLOADS or failed_files >= MAX_FAILED_FILES:
             break
 
         attributes = entry["attributes"]
@@ -170,31 +210,48 @@ def main():
         legacy_id = int(attributes["legacy_subtitle_id"])
         files = attributes.get("files") or []
         if len(files) != 1:
-            print(f"Skipped {legacy_id}: expected one file")
+            record_failure(listings, index_fields, legacy_id, "expected one API file")
+            failed_files += 1
+            continue
+
+        relative_path = f"{number:03d}/{number:03d}.{language}.opensubtitles-{legacy_id}.srt"
+        destination = ROOT / relative_path
+        if destination.exists():
+            record_failure(listings, index_fields, legacy_id, "destination already exists outside manifest")
+            failed_files += 1
             continue
 
         try:
             link = download_link(api_key, token, files[0]["file_id"])
             content = fetch_subtitle(link)
         except urllib.error.HTTPError as error:
-            body = error.read().decode("utf-8", errors="replace")
-            safe_body = body.replace(api_key, "[redacted]").replace(token, "[redacted]")
-            print(f"Stopped at {legacy_id}: HTTP {error.code} {safe_body[:300]}")
-            break
+            if error.code == 401:
+                try:
+                    token = login(username, password, api_key)
+                    link = download_link(api_key, token, files[0]["file_id"])
+                    content = fetch_subtitle(link)
+                except (urllib.error.HTTPError, urllib.error.URLError, ValueError, KeyError) as retry_error:
+                    reason = f"HTTP {retry_error.code}" if isinstance(retry_error, urllib.error.HTTPError) else type(retry_error).__name__
+                    record_failure(listings, index_fields, legacy_id, f"fresh login failed: {reason}")
+                    break
+            elif error.code == 406:
+                print(f"Free daily allowance exhausted at {legacy_id}", flush=True)
+                break
+            else:
+                record_failure(listings, index_fields, legacy_id, f"HTTP {error.code}")
+                failed_files += 1
+                continue
         except ValueError as error:
-            print(f"Stopped at {legacy_id}: {error}")
-            break
+            record_failure(listings, index_fields, legacy_id, str(error))
+            failed_files += 1
+            continue
         except (urllib.error.URLError, KeyError) as error:
-            print(f"Stopped at {legacy_id}: {type(error).__name__}")
-            break
+            record_failure(listings, index_fields, legacy_id, type(error).__name__)
+            failed_files += 1
+            continue
 
         directory = ROOT / f"{number:03d}"
         directory.mkdir(exist_ok=True)
-        relative_path = f"{number:03d}/{number:03d}.{language}.opensubtitles-{legacy_id}.srt"
-        destination = ROOT / relative_path
-        if destination.exists():
-            print(f"Stopped at {legacy_id}: destination already exists")
-            break
 
         destination.write_bytes(content)
         row = {
@@ -220,18 +277,16 @@ def main():
             if listing["opensubtitles_id"] == str(legacy_id):
                 listing["archive_status"] = "saved"
                 listing["subtitle_file"] = relative_path
+                listing["last_download_error"] = ""
                 break
 
-        with INDEX.open("w", newline="") as stream:
-            writer = csv.DictWriter(stream, fieldnames=index_fields)
-            writer.writeheader()
-            writer.writerows(listings)
+        save_index(listings, index_fields)
 
         downloaded += 1
         print(f"Saved {number:03d} {language} {legacy_id} ({downloaded}/{MAX_DOWNLOADS})", flush=True)
         time.sleep(2)
 
-    print(f"Finished with {downloaded} new files", flush=True)
+    print(f"Finished with {downloaded} new files and {failed_files} skipped failures", flush=True)
 
 
 if __name__ == "__main__":
